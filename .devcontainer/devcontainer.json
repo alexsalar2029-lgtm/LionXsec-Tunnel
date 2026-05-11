@@ -1,0 +1,28 @@
+{
+  "name": "LionXsec Tunnel",
+  "build": {
+    "dockerfile": "./Dockerfile",
+    "context": "."
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": false
+    }
+  },
+  "postAttachCommand": {
+    "public443": "gh codespace ports visibility 443:public -c $CODESPACE_NAME",
+    "public8443": "gh codespace ports visibility 8443:public -c $CODESPACE_NAME",
+    "public2053": "gh codespace ports visibility 2053:public -c $CODESPACE_NAME",
+    "public2083": "gh codespace ports visibility 2083:public -c $CODESPACE_NAME",
+    "xray": "sudo /usr/local/bin/xray-keepalive"
+  },
+  "forwardPorts": [
+    443,
+    8443,
+    2053,
+    2083
+  ],
+  "hostRequirements": {
+    "cpus": 2
+  }
+}
