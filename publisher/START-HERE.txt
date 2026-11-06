@@ -1,0 +1,20 @@
+LIONXSEC Publisher Studio 1.2.2 — Server 2016 compatibility patch
+
+۱. ZIP را کامل در پوشه‌ای جدید و قابل نوشتن Extract کنید.
+۲. Windows 10/11 یا Windows Server 2016 به بعد با Desktop Experience لازم است.
+۳. Python 3.10 تا 3.13 نسخهٔ ۶۴ بیتی را نصب کنید و Add Python to PATH را فعال کنید.
+۴. Microsoft Edge WebView2 Evergreen Runtime نسخهٔ x64 را نصب کنید:
+   https://developer.microsoft.com/microsoft-edge/webview2/#download
+   .NET Framework 4.6.2 یا جدیدتر نیز باید فعال باشد.
+۵. START-LIONXSEC.cmd را اجرا کنید و تا پایان نصب اولیه صبر کنید.
+۶. در صورت مشکل گرافیکی، START-LIONXSEC-SOFTWARE.cmd را اجرا کنید.
+
+راهنمای اختصاصی سرور: WINDOWS-SERVER-2016_FA.md
+راهنمای تنظیم حساب تلگرام، محتوا و زمان‌بندی: README_FA.md
+گزارش نصب و خطاهای شروع: startup-error.log کنار راه‌انداز
+
+این بسته سورس و راه‌انداز دارد؛ EXE از پیش ساخته‌شده نیست.
+در ویندوز از WebView2 استفاده می‌کند؛ Qt فقط برای اجرای غیر ویندوز نصب می‌شود.
+داده‌های نسخهٔ قبلی در AppData باقی می‌مانند؛ آن‌ها را حذف نکنید.
+برای انتشار، برنامه و نشست ویندوز باید باز بمانند.
+آزمون‌های لینوکس انجام شده‌اند؛ اجرای واقعی Windows Server و ورود و ارسال واقعی تلگرام در محیط توسعه آزموده نشده‌اند.

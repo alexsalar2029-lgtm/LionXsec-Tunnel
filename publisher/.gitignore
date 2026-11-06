@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+tests/artifacts/
+*.sqlite3*
+account-session.dat
+api-credentials.dat
+instance.lock
+startup-error.log
+core
+core.*

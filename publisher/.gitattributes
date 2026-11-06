@@ -1,0 +1,2 @@
+# Preserve Windows launchers with CRLF in repository ZIP downloads.
+*.cmd -text
