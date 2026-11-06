@@ -1,3 +1,10 @@
+# Server 2016 Fix2: missing WebView2 prerequisite
+
+- Detect and report .NET Framework and WebView2 separately before loading the Windows renderer.
+- When .NET is suitable but WebView2 is missing, download Microsoft's Evergreen x64 installer and require a valid Microsoft Authenticode signature before execution. Support the official standalone installer placed beside the launcher for offline distribution.
+- Recheck Runtime registration after installation, preserve existing installations and handle installation errors or reboot requests without launching the app prematurely.
+- Keep the Python dependency cache independent of whether the .NET runtime can load. Add 14 regression tests for prerequisite detection and setup decisions. Windows installer execution remains unverified in the Linux development environment.
+
 # Server 2016 compatibility patch for 1.2.2
 
 - Use Microsoft Edge WebView2 on Windows, including Server 2016 Desktop Experience, instead of requiring Qt 6.10. Keep Qt WebEngine on Linux and reject legacy MSHTML fallback.

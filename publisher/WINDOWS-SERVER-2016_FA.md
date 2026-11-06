@@ -8,10 +8,10 @@
 
 1. سرور باید **Windows Server 2016 با Desktop Experience** باشد. با Remote Desktop وارد دسکتاپ شوید. Server Core محیط مناسب این برنامهٔ گرافیکی نیست.
 2. [Python برای ویندوز](https://www.python.org/downloads/windows/) نسخهٔ **3.10 تا 3.13، ۶۴ بیتی** را نصب کنید. گزینهٔ **Add Python to PATH** را فعال کنید. Python 3.12 نسخهٔ مورد استفاده در آزمون‌های این اصلاح بوده است.
-3. از [صفحهٔ رسمی Microsoft WebView2](https://developer.microsoft.com/microsoft-edge/webview2/#download)، **Evergreen Standalone Installer → x64** را دریافت و نصب کنید. نصب مرورگر Edge به‌تنهایی جای Runtime را نمی‌گیرد. برای نصب خط فرمان، دستور رسمی `MicrosoftEdgeWebView2RuntimeInstallerX64.exe /silent /install` قابل استفاده است.
+3. در نسخهٔ **Fix2**، راه‌انداز وجود **WebView2 Runtime** را بررسی می‌کند. اگر وجود نداشته باشد، نصب‌کنندهٔ رسمی x64 را از مایکروسافت دانلود و پس از تأیید امضای دیجیتال اجرا می‌کند. نصب مرورگر Edge به‌تنهایی جای Runtime را نمی‌گیرد. برای نصب دستی، از [صفحهٔ رسمی Microsoft WebView2](https://developer.microsoft.com/microsoft-edge/webview2/#download)، **Evergreen Standalone Installer → x64** را دریافت و نصب کنید.
 4. **.NET Framework 4.6.2 یا جدیدتر** باید فعال باشد؛ این نسخه معمولاً همراه سرور ۲۰۱۶ است. در صورت خطای .NET، نصب یا فعال‌سازی آن را بررسی کنید؛ .NET Framework 4.8 نیز مناسب است.
 5. برنامهٔ قبلی را ببندید. ZIP جدید را در پوشه‌ای جدید و قابل نوشتن، مثل `C:\LIONXSEC`، کامل استخراج کنید. فایل را مستقیماً از داخل ZIP اجرا نکنید.
-6. **START-LIONXSEC.cmd** را اجرا کنید و پنجرهٔ نصب را تا پایان دانلود وابستگی‌ها باز نگه دارید. نصب اول اینترنت می‌خواهد.
+6. **START-LIONXSEC.cmd** را اجرا کنید و پنجرهٔ نصب را تا پایان دانلود وابستگی‌ها و WebView2 باز نگه دارید. نصب اول اینترنت می‌خواهد و دانلود Runtime ممکن است چند دقیقه طول بکشد.
 7. اگر در Remote Desktop پنجره خالی بود یا خطای گرافیکی دیدید، برنامه را ببندید و **START-LIONXSEC-SOFTWARE.cmd** را اجرا کنید.
 
 لازم نیست فایل‌های برنامه را به‌صورت Administrator اجرا کنید؛ نصب سیستمی پیش‌نیازها ممکن است دسترسی مدیر بخواهد.
@@ -22,6 +22,9 @@
 
 - **Python ... was not found:** Python ۶۴ بیتی را نصب کنید و پنجرهٔ فرمان تازه‌ای باز کنید.
 - **Windows desktop initialization failed / desktop_renderer_unavailable:** WebView2 Runtime نسخهٔ x64 و .NET Framework را بررسی کنید. اگر Runtime را با حساب دیگری نصب کرده‌اید، آن را برای کاربر جاری یا همهٔ کاربران نصب کنید.
+- **MSHTML is deprecated پس از نصب موفق کتابخانه‌ها:** موتور WebView2 انتخاب نشده است. Fix2 شمارهٔ انتشار .NET و نسخهٔ Runtime را جداگانه در گزارش می‌نویسد؛ اگر Runtime موجود نباشد، نصب آن را انجام می‌دهد. اگر .NET قدیمی یا غیرفعال باشد، ابتدا نصب یا فعال‌سازی .NET Framework لازم است.
+- **خطای دانلود یا امضای نصب‌کننده:** نصب‌کنندهٔ رسمی x64 را دستی دریافت کنید؛ می‌توانید آن را نصب کنید یا با نام `MicrosoftEdgeWebView2RuntimeInstallerX64.exe` کنار `START-LIONXSEC.cmd` قرار دهید و دوباره راه‌انداز را اجرا کنید. فایل محلی نیز باید امضای معتبر مایکروسافت داشته باشد. در خطای اعتماد گواهی، ساعت سیستم و به‌روزرسانی گواهی‌های ویندوز را بررسی کنید.
+- **درخواست Restart:** تنها اگر نصب‌کننده درخواست کرد، ویندوز را دوباره راه‌اندازی کنید و سپس برنامه را اجرا کنید. برنامه خودش سرور را Restart نمی‌کند.
 - **No matching distribution / خطای دانلود:** اتصال سرور به `pypi.org` و `files.pythonhosted.org` و نسخهٔ Python را بررسی کنید.
 - **Cannot write startup-error.log:** بسته را به پوشه‌ای منتقل کنید که کاربر فعلی اجازهٔ نوشتن در آن دارد.
 - **already running:** پنجرهٔ نسخهٔ قبلی را پیدا کنید و ببندید.

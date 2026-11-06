@@ -1,6 +1,16 @@
 # Validation — LIONXSEC Publisher Studio 1.2.2, Server 2016 compatibility patch
 
-## Current patch validation
+## Fix2 validation
+
+The supplied Windows Server 2016 log confirms successful installation of the Python dependencies under Python 3.10.11 x64, followed by pywebview selecting MSHTML and the application's intentional `desktop_renderer_unavailable` rejection. That log alone does not distinguish an absent WebView2 Runtime from an unsuitable .NET Framework installation.
+
+The new prerequisite check reports both versions and installs the signed Microsoft Evergreen Runtime only when .NET is suitable and the Runtime is missing or too old. Registry permission failures do not trigger an installation. Installer success is followed by a registry recheck; reboot requests stop setup without rebooting the machine.
+
+`python -m unittest discover -s tests -p 'test_*.py' -v`: **64 tests passed** on Linux. The 14 additional tests cover per-user and per-machine registration, invalid/outdated versions, .NET failures, installation and post-install checks, restart requests, registry access errors, rejection after failed signature verification, offline installer handling, installer exit codes and cached-setup integration. Registry access, PowerShell verification and EXE execution are simulated in these tests; no Windows installer was run in this environment.
+
+The existing Linux installation was refreshed through `setup_desktop.py`. Actual Windows Authenticode verification, Runtime download/installation and native WebView2 execution still require validation on Windows. No live account credentials are used by these tests.
+
+## Previous compatibility patch validation
 
 Validated with Python 3.12 on Debian Linux from the final `publisher` directory:
 

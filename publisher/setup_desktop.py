@@ -4,10 +4,12 @@ import subprocess
 import sys
 import venv
 
+from windows_prerequisites import ensure_windows_runtime
+
 ROOT=Path(__file__).resolve().parent
 # cryptg is an optional accelerator; the app must still start without it.
 HARD_IMPORTS='import webview,requests,PIL,imageio_ffmpeg,jdatetime,pypdf,telethon'
-HARD_IMPORTS += '; import clr' if sys.platform=='win32' else '; import qtpy; from PySide6 import QtWebEngineWidgets'
+HARD_IMPORTS += '; import importlib.util; assert importlib.util.find_spec("clr") is not None' if sys.platform=='win32' else '; import qtpy; from PySide6 import QtWebEngineWidgets'
 
 
 def pip_install(python,args):
@@ -42,11 +44,12 @@ def main():
         if code: return code
         marker.write_text(digest)
     if sys.platform=='win32':
+        if ensure_windows_runtime():
+            return 1
         check=subprocess.run([str(python),'-c','from desktop_runtime import initialize_desktop; initialize_desktop()'],cwd=ROOT)
         if check.returncode:
-            print('Windows desktop initialization failed. Install Microsoft Edge WebView2 Evergreen Runtime (x64).',flush=True)
-            print('Official download: https://developer.microsoft.com/microsoft-edge/webview2/#download',flush=True)
-            print('Also required: .NET Framework 4.6.2 or later, and a logged-in Windows desktop (not Server Core).',flush=True)
+            print('WebView2 and .NET were detected, but Windows desktop initialization still failed.',flush=True)
+            print('Use a logged-in Windows desktop (not Server Core) and read the exact exception above.',flush=True)
             print('Read startup-error.log for the complete error, then run START-LIONXSEC.cmd again.',flush=True)
             return 1
     print('Opening LIONXSEC Publisher...',flush=True);return 0

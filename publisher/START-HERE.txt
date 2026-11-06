@@ -1,11 +1,12 @@
-LIONXSEC Publisher Studio 1.2.2 — Server 2016 compatibility patch
+LIONXSEC Publisher Studio 1.2.2 — Server 2016 Fix2
 
 ۱. ZIP را کامل در پوشه‌ای جدید و قابل نوشتن Extract کنید.
 ۲. Windows 10/11 یا Windows Server 2016 به بعد با Desktop Experience لازم است.
 ۳. Python 3.10 تا 3.13 نسخهٔ ۶۴ بیتی را نصب کنید و Add Python to PATH را فعال کنید.
-۴. Microsoft Edge WebView2 Evergreen Runtime نسخهٔ x64 را نصب کنید:
+۴. .NET Framework 4.6.2 یا جدیدتر باید فعال باشد.
+   راه‌انداز، WebView2 Runtime را در صورت نبودن، پس از بررسی امضای مایکروسافت نصب می‌کند.
+   برای نصب دستی WebView2 Runtime نسخهٔ x64:
    https://developer.microsoft.com/microsoft-edge/webview2/#download
-   .NET Framework 4.6.2 یا جدیدتر نیز باید فعال باشد.
 ۵. START-LIONXSEC.cmd را اجرا کنید و تا پایان نصب اولیه صبر کنید.
 ۶. در صورت مشکل گرافیکی، START-LIONXSEC-SOFTWARE.cmd را اجرا کنید.
 
