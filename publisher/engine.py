@@ -7,7 +7,8 @@ import time
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo,ZoneInfoNotFoundError
 
-from content import KINDS,MAX_BYTES,ContentError,analyze,caption,fingerprint,prepare,protected_content,thumbnail,validate_caption_template
+from content import KINDS,MAX_BYTES,ContentError,analyze,caption,detect_kind,fingerprint,prepare,protected_content,thumbnail,validate_caption_template
+from ai_client import check_openai,validate_key
 from mtproto_client import MTProto,TelegramError,account_label,normalize_api_hash,normalize_api_id,normalize_phone
 from storage import DEFAULTS,atomic_write
 
@@ -15,7 +16,7 @@ from storage import DEFAULTS,atomic_write
 def validate_settings(data):
     if not isinstance(data,dict): raise ValueError('invalid_settings')
     value={**DEFAULTS,**{k:v for k,v in data.items() if k in DEFAULTS and k!='enabled'}}
-    for key in ['folder','channel','tag','website','timezone','model','brand',
+    for key in ['folder','channel','tag','website','timezone','model','brand','ai_provider','openai_model',
                 'account_name','account_username','account_phone']:
         if not isinstance(value[key],str): raise ValueError('invalid_settings')
         value[key]=value[key].strip()
@@ -28,6 +29,8 @@ def validate_settings(data):
         u=urlparse(value['website'])
         if u.scheme not in ('https','http') or not u.hostname or u.username or len(value['website'])>240: raise ValueError('website_invalid')
     if not re.fullmatch(r'[A-Za-z0-9._:/-]{1,100}',value['model']): raise ValueError('model_invalid')
+    if value['ai_provider'] not in ('ollama','openai'): raise ValueError('invalid_settings')
+    if not re.fullmatch(r'[A-Za-z0-9._-]{1,100}',value['openai_model']): raise ValueError('model_invalid')
     try: ZoneInfo(value['timezone'])
     except (ZoneInfoNotFoundError,ValueError): raise ValueError('timezone_invalid') from None
     times=value['times']
@@ -193,6 +196,32 @@ class Engine:
             if error.code=='session_invalid': self.close_account()
             raise
 
+    def save_openai_key(self,key):
+        key=validate_key(key)
+        with self.lock:
+            self.store.set_openai_key(key)
+            self.revision+=1;self.store.update_settings({'enabled':False})
+        return {'saved':True}
+
+    def clear_openai_key(self):
+        with self.lock:
+            self.store.clear_openai_key()
+            self.revision+=1;self.store.update_settings({'enabled':False})
+        return {'saved':False}
+
+    def test_ai(self):
+        settings=self.store.settings()
+        if settings['ai_provider']=='openai':
+            return check_openai(self.store.openai_key(),settings['openai_model'])
+        import requests
+        try:
+            result=requests.get('http://127.0.0.1:11434/api/tags',timeout=8);result.raise_for_status()
+            models=[entry['name'] for entry in result.json().get('models',[])]
+        except Exception: raise ValueError('ollama_unavailable') from None
+        model=settings['model']
+        if model not in models and model+':latest' not in models: raise ValueError('model_missing')
+        return {'provider':'ollama','model':model}
+
     def _assign(self,db,config,now):
         occupied=[r[0] for r in db.execute("SELECT scheduled FROM jobs WHERE status='scheduled'")]
         rows=db.execute("SELECT id FROM jobs WHERE status='draft' AND error='' AND title<>'' ORDER BY id").fetchall()
@@ -203,6 +232,7 @@ class Engine:
 
     def enable(self):
         with self.lock:
+            if self.runtime['scanning']: raise ValueError('scan_busy')
             revision=self.revision;config=self.store.settings()
         if not config['channel']: raise ValueError('channel_missing')
         self.verify()
@@ -224,34 +254,38 @@ class Engine:
             self.revision+=1;self.store.update_settings({'enabled':False})
         self.store.event('انتشارهای بعدی متوقف شدند. ارسال جاری، در صورت شروع، ممکن است کامل شود.')
 
-    def scan_async(self,only_id=None):
+    def scan_async(self,only_id=None,recheck=False):
         config=self.store.settings()
         if not config['folder'] or not Path(config['folder']).is_dir(): raise ValueError('folder_missing')
         if only_id is not None:
             prior=self.store.job(only_id)
-            if not prior or prior['status'] in ('sent','sending','preparing','blocked','uncertain'): raise ValueError('job_locked')
+            if not prior or prior['status'] in ('sent','sending','preparing','uncertain'): raise ValueError('job_locked')
         if not self.scan_lock.acquire(blocking=False): raise ValueError('scan_busy')
-        self.runtime.update(scanning=True,scanned=0,total=0,current='')
+        with self.lock:
+            if recheck or only_id is not None:
+                self.revision+=1;self.store.update_settings({'enabled':False})
+            self.runtime.update(scanning=True,scanned=0,total=0,current='')
         def work():
-            try: self._scan(only_id)
+            try: self._scan(only_id,recheck=recheck)
             except Exception: self.store.event('خواندن پوشه کامل نشد؛ مسیر و دسترسی فایل‌ها را بررسی کنید.','error')
             finally:
                 self.runtime.update(scanning=False,current='');self.last_scan=self.clock();self.scan_lock.release()
         threading.Thread(target=work,name='intake',daemon=True).start()
 
-    def _scan(self,only_id=None):
-        config=self.store.settings();folder=Path(config['folder'])
+    def _scan(self,only_id=None,recheck=False):
+        with self.lock: config=self.store.settings();scan_revision=self.revision
+        folder=Path(config['folder'])
         if not config['folder'] or not folder.is_dir(): raise ValueError('folder_missing')
         if only_id is not None:
             prior=self.store.job(only_id)
-            if not prior or prior['status'] in ('sent','sending','preparing','blocked','uncertain'): raise ValueError('job_locked')
+            if not prior or prior['status'] in ('sent','sending','preparing','uncertain'): raise ValueError('job_locked')
             paths=[Path(prior['path'])]
         else:
             source=folder.rglob('*') if config['recursive'] else folder.iterdir()
             paths=sorted((p for p in source if p.is_file() and not p.is_symlink() and p.suffix.lower() in KINDS and not p.name.endswith('.caption.txt') and not p.resolve().is_relative_to(self.store.directory.resolve()) and not any(part in ('.venv','.git') for part in p.parts)),key=lambda p:p.name.lower())
-        self.runtime['total']=len(paths);added=0
+        self.runtime['total']=len(paths);added=0;checked=0;processed=set()
         for index,path in enumerate(paths):
-            identifier=None
+            identifier=only_id
             if self.stop_event.is_set(): break
             self.runtime.update(scanned=index,current=path.name)
             kind=KINDS.get(path.suffix.lower())
@@ -259,44 +293,95 @@ class Engine:
             try:
                 size=path.stat().st_size
                 if not size or size>MAX_BYTES: continue
-                digest=fingerprint(path);now=self.clock()
-                with self.store.db() as db:
-                    existing=db.execute('SELECT id FROM jobs WHERE digest=?',(digest,)).fetchone()
-                    if existing and only_id is None: continue
-                    if only_id is not None:
-                        identifier=only_id
-                        changed=db.execute("UPDATE jobs SET status='review',error='analyzing',digest=?,updated=? WHERE id=? AND status NOT IN ('sent','sending','preparing','blocked','uncertain')",(digest,now,identifier))
-                        if not changed.rowcount: continue
+                digest=fingerprint(path);now=self.clock();resolved=str(path.resolve())
+                with self.lock,self.store.db() as db:
+                    if self.revision!=scan_revision: break
+                    db.execute('BEGIN IMMEDIATE')
+                    match=db.execute('SELECT * FROM jobs WHERE digest=?',(digest,)).fetchone()
+                    prior=(db.execute('SELECT * FROM jobs WHERE id=?',(only_id,)).fetchone() if only_id is not None
+                           else db.execute('SELECT * FROM jobs WHERE path=? ORDER BY id DESC LIMIT 1',(resolved,)).fetchone())
+                    if not prior and match and not Path(match['path']).exists(): prior=match
+                    if prior and prior['status'] in ('sending','preparing','uncertain'): continue
+                    if prior and prior['status']=='sent':
+                        if only_id is not None or prior['digest']==digest: continue
+                        prior=None  # A changed file is a new publication; keep the sent history.
+                    if prior and prior['status']=='excluded' and only_id is None: continue
+                    if match and (not prior or match['id']!=prior['id']):
+                        if prior:
+                            db.execute("UPDATE jobs SET status='review',error='duplicate_content',scheduled=NULL WHERE id=?",(prior['id'],))
+                        continue
+                    if prior:
+                        if prior['id'] in processed: continue
+                        if not (only_id is not None or recheck or prior['digest']!=digest or prior['path']!=resolved or prior['error']=='analysis_required'): continue
+                        identifier=prior['id']
+                        db.execute("UPDATE jobs SET status='review',error='analyzing',path=?,digest=?,filename=?,kind=?,size=?,title='',body='',analysis='',content_type='',source_date='',scheduled=NULL,channel='',updated=? WHERE id=?",
+                                   (resolved,digest,path.name,kind,size,now,identifier))
                     else:
                         cursor=db.execute("INSERT OR IGNORE INTO jobs(path,digest,filename,kind,size,status,error,created,updated) VALUES(?,?,?,?,?,'review','analyzing',?,?)",(str(path.resolve()),digest,path.name,kind,size,now,now))
                         if not cursor.rowcount: continue
                         identifier=cursor.lastrowid;added+=1
-                thumb=thumbnail(path,kind)
-                if thumb: atomic_write(self.store.directory/'thumbs'/f'{identifier}.jpg',thumb)
-                try: result=self.analyzer(path,kind,config)
+                processed.add(identifier);self._clear_outputs(identifier)
+                try:
+                    kind=detect_kind(path)
+                    with self.store.db() as db: db.execute('UPDATE jobs SET kind=? WHERE id=?',(kind,identifier))
+                    thumb=thumbnail(path,kind)
+                    if thumb: atomic_write(self.store.directory/'thumbs'/f'{identifier}.jpg',thumb)
+                    analysis_settings=dict(config)
+                    if config['ai'] and config['ai_provider']=='openai':
+                        analysis_settings['_openai_key']=self.store.openai_key()
+                    result=self.analyzer(path,kind,analysis_settings)
                 except ContentError as error:
                     result={'status':'review','title':path.stem[:100],'body':'','error':error.code,'analysis':''}
                 if fingerprint(path)!=digest: raise ContentError('file_changed')
-                with self.store.db() as db:
-                    db.execute("UPDATE jobs SET status=?,title=?,body=?,error=?,analysis=?,updated=? WHERE id=? AND status='review' AND error='analyzing'",
-                               (result['status'],result['title'],result['body'],result['error'],result['analysis'],self.clock(),identifier))
-            except Exception:
+                with self.lock,self.store.db() as db:
+                    if self.revision!=scan_revision:
+                        result={'status':'review','title':'','body':'','error':'analysis_settings_changed','analysis':''}
+                    db.execute("UPDATE jobs SET status=?,title=?,body=?,error=?,analysis=?,content_type=?,source_date=?,updated=? WHERE id=? AND status='review' AND error='analyzing'",
+                               (result['status'],result['title'],result['body'],result['error'],result['analysis'],result.get('content_type',''),result.get('source_date',''),self.clock(),identifier))
+                checked+=1
+            except Exception as error:
                 if identifier is not None:
-                    with self.store.db() as db: db.execute("UPDATE jobs SET status='review',error='file_changed' WHERE id=? AND status='review' AND error='analyzing'",(identifier,))
+                    code=error.code if isinstance(error,ContentError) else 'file_missing' if isinstance(error,FileNotFoundError) else 'analysis_failed'
+                    with self.store.db() as db: db.execute("UPDATE jobs SET status='review',error=?,scheduled=NULL WHERE id=? AND status NOT IN ('sent','sending','preparing','uncertain') AND (error='analyzing' OR ?)", (code,identifier,only_id is not None))
             with self.lock:
                 current=self.store.settings()
                 if current['enabled']:
                     with self.store.db() as db:
                         db.execute('BEGIN IMMEDIATE');self._assign(db,current,self.clock())
         self.runtime['scanned']=len(paths)
-        if added: self.store.event(str(added)+' فایل جدید بررسی شد؛ فایل‌های اصلی حفظ شدند.')
+        if checked: self.store.event(str(checked)+' فایل بررسی شد؛ '+str(added)+' فایل جدید بود.')
+
+    def _clear_outputs(self,identifier):
+        paths=[self.store.directory/'thumbs'/f'{identifier}.jpg']
+        outputs=self.store.directory/'prepared'
+        paths+=list(outputs.glob(f'{identifier}-*'))+[outputs/f'{identifier}.jpg',outputs/f'{identifier}.mp4']
+        for path in paths:
+            try: path.unlink(missing_ok=True)
+            except OSError: pass
+
+    def clear_analysis(self,identifier=None):
+        if not self.scan_lock.acquire(blocking=False): raise ValueError('scan_busy')
+        try:
+            with self.lock,self.store.db() as db:
+                db.execute('BEGIN IMMEDIATE')
+                sql="SELECT id FROM jobs WHERE status NOT IN ('sent','sending','preparing','uncertain')"
+                rows=db.execute(sql+' AND id=?',(int(identifier),)).fetchall() if identifier is not None else db.execute(sql).fetchall()
+                if identifier is not None and not rows: raise ValueError('job_locked')
+                self.revision+=1
+                db.execute("INSERT OR REPLACE INTO settings VALUES('enabled','false')")
+                for row in rows:
+                    db.execute("UPDATE jobs SET title='',body='',analysis='',content_type='',source_date='',status='review',error='analysis_required',scheduled=NULL,channel='',updated=? WHERE id=?",(self.clock(),row['id']))
+            for row in rows: self._clear_outputs(row['id'])
+            self.store.event('نتیجهٔ بررسی '+str(len(rows))+' فایل پاک شد؛ برای تحلیل تازه، بررسی محتوا را بزنید.')
+            return {'cleared':len(rows)}
+        finally: self.scan_lock.release()
 
     def edit(self,identifier,title,body):
         if not isinstance(title,str) or not title.strip() or len(title)>100 or not isinstance(body,str) or len(body)>500: raise ValueError('caption_invalid')
         if protected_content(title+'\n'+body): raise ValueError('sensitive_content')
         with self.lock,self.store.db() as db:
             row=db.execute('SELECT * FROM jobs WHERE id=?',(int(identifier),)).fetchone()
-            if not row or row['status'] in ('sent','sending','preparing','blocked','uncertain') or row['error']=='analyzing': raise ValueError('job_locked')
+            if not row or row['status'] in ('sent','sending','preparing','blocked','uncertain') or row['error'] in ('analyzing','analysis_required'): raise ValueError('job_locked')
             db.execute("UPDATE jobs SET title=?,body=?,status='draft',error='',scheduled=NULL,updated=? WHERE id=?",(title.strip(),body.strip(),self.clock(),int(identifier)))
 
     def remove(self,identifier):
@@ -342,7 +427,7 @@ class Engine:
                 db.execute("UPDATE jobs SET status='sent',sent=?,message_id=?,error='',updated=? WHERE id=?",(self.clock(),result.get('message_id'),self.clock(),job['id']))
             self.store.event('پست شمارهٔ '+str(job['id'])+' با موفقیت منتشر شد.')
         except ContentError as error:
-            with self.store.db() as db: db.execute("UPDATE jobs SET status=?,error=?,updated=? WHERE id=?",('blocked' if error.code=='sensitive_content' else 'review',error.code,self.clock(),job['id']))
+            with self.store.db() as db: db.execute("UPDATE jobs SET status=?,error=?,updated=? WHERE id=?",('blocked' if error.code.startswith('sensitive_') else 'review',error.code,self.clock(),job['id']))
         except TelegramError as error:
             attempts=job['attempts']+1
             if error.uncertain: status='uncertain'

@@ -14,5 +14,8 @@ The launcher installs dependencies from their published Python packages into a l
 - **Pillow**: HPND and third-party image-library notices; https://python-pillow.org/.
 - **imageio-ffmpeg / FFmpeg**: wrapper and executable have separate licenses. Consult the installed distribution and the executable's license configuration before redistributing FFmpeg.
 - **pypdf, jdatetime and tzdata**: consult their installed package license files.
+- **Playwright**: Apache-2.0; https://github.com/microsoft/playwright-python. Optional development dependency for browser tests; it is not installed by the end-user launcher. Browser binaries have their own notices.
+
+OpenAI is an optional remote API service accessed through Requests, subject to the account's OpenAI service terms and billing. No OpenAI SDK or model weights are bundled. Selecting Ollama instead uses the separately installed local service and model, which have their own terms.
 
 The project accesses these libraries through normal Python imports; the installed libraries remain separate and replaceable. This file is an index of notices and does not replace any dependency's license terms.

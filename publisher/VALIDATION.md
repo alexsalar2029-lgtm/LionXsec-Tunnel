@@ -1,4 +1,30 @@
-# Validation — LIONXSEC Publisher Studio 1.2.2, Server 2016 compatibility patch
+# Validation — LIONXSEC Publisher Studio 1.3.0
+
+## 1.3.0 validation
+
+Validated on Debian Linux with Python 3.12. Production dependencies remain in `requirements.txt`; `requirements-dev.txt` adds Playwright for the browser check.
+
+```sh
+python -m pip install -r requirements-dev.txt
+python -m pip check
+python -m unittest discover -s tests -p 'test_*.py' -q
+python tests/media_smoke.py
+node --check ui/app.js
+XDG_CACHE_HOME=/workspace/.cache python tests/browser_smoke.py
+XDG_CACHE_HOME=/workspace/.cache QT_QPA_PLATFORM=offscreen QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu python tests/native_smoke.py
+```
+
+- **89 unit/integration tests passed.** The 25 added tests cover explicit versus background rescans, unchanged TXT reanalysis, corrected blocked content, retained sensitive-data checks, source/history preservation, per-post clearing, busy scans, format changes, renames, missing files, mid-analysis settings changes, metadata, legacy schema migration, private API key storage/removal, structured multimodal requests, safe HTTP errors, refusals and invented source dates.
+- **Browser UI passed** against installed Chromium through Playwright: actual UI and Python APIs, key save/remove, OpenAI settings, clear confirmation, repeated analysis, corrected blocked TXT, metadata, library, login controls, queue/pause and widths 900/1100/1440 without horizontal overflow or JavaScript errors. `CHROMIUM_EXECUTABLE` can select a local Chromium binary; otherwise the test uses `chromium` on PATH or a Playwright-managed browser. Install a browser separately if neither is available.
+- **Native Linux window passed** with real Qt WebEngine and the JavaScript/Python bridge, including clearing, rechecking, sent-history preservation and API key privacy. The test uses temporary data and closes itself.
+- **Real FFmpeg media check passed:** three extracted frames, MP4 transcoding, watermark overlay and unchanged original bytes.
+- **Dependency consistency, JavaScript syntax and Python 3.10 grammar checks passed.**
+
+OpenAI responses, connection checks and Telegram operations are simulated in automated tests. No real API key or account credentials are required. These checks validate request/response handling and workflow, not live model quality, billing, connectivity or delivery. Windows Server 2016, Windows DPAPI, native WebView2 and Microsoft's installer were not executed in this Linux environment. On Windows, run `python tests/native_smoke.py` using `.venv\Scripts\python.exe` to exercise the platform renderer without live Telegram sends.
+
+The OpenAI key is stored in `openai-key.dat`, using the existing DPAPI protection on Windows and restrictive file permissions elsewhere. UI snapshots contain only a saved-key boolean. Authentication headers are sent only to the fixed OpenAI HTTPS endpoint with redirects disabled. Analysis uses `store: false`; actual service retention is governed by the account's OpenAI policies.
+
+Screenshots are generated in `tests/artifacts/` and excluded from release archives. Distribution includes source, launchers, fonts, guides and tests; it excludes environments, runtime databases, credentials, sessions, caches and screenshots. Historical results below describe earlier versions and their environments.
 
 ## Fix2 validation
 

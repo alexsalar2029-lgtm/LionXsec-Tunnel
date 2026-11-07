@@ -9,6 +9,7 @@ import time
 import traceback
 
 from content import caption,prepare,ContentError
+from ai_client import AIError
 from desktop_runtime import desktop_gui,initialize_desktop,software_environment
 from engine import Engine
 from mtproto_client import TelegramError
@@ -67,12 +68,13 @@ class API:
 
     def _call(self,function,*args):
         try: return {'ok':True,'value':function(*args)}
-        except (ValueError,ContentError,TelegramError) as error: return {'ok':False,'error':getattr(error,'code',str(error))}
+        except (ValueError,ContentError,TelegramError,AIError) as error: return {'ok':False,'error':getattr(error,'code',str(error))}
         except Exception: return {'ok':False,'error':'operation_failed'}
 
     def snapshot(self):
         settings=self._store.settings()
         settings['account_set']=self._store.has_session()
+        settings['openai_key_set']=self._store.has_openai_key()
         with self._store.db() as db:
             jobs=[dict(row) for row in db.execute('SELECT * FROM jobs ORDER BY id DESC LIMIT 500')]
             counts=dict(db.execute('SELECT status,count(*) FROM jobs GROUP BY status').fetchall())
@@ -86,7 +88,10 @@ class API:
     def login_password(self,password): return self._call(self._engine.login_password,password)
     def login_cancel(self): return self._call(self._engine.login_cancel)
     def disconnect_account(self): return self._call(self._engine.disconnect_account)
-    def scan(self): return self._call(self._engine.scan_async)
+    def scan(self): return self._call(self._engine.scan_async,None,True)
+    def clear_analysis(self,identifier=None): return self._call(self._engine.clear_analysis,identifier)
+    def save_openai_key(self,key): return self._call(self._engine.save_openai_key,key)
+    def clear_openai_key(self): return self._call(self._engine.clear_openai_key)
     def enable(self): return self._call(self._engine.enable)
     def pause(self): return self._call(self._engine.pause)
     def edit(self,identifier,title,body): return self._call(self._engine.edit,identifier,title,body)
@@ -120,7 +125,7 @@ class API:
     def prepare_copy(self,identifier):
         def build():
             job=self._store.job(identifier)
-            if not job or job['status'] in ('blocked','sending','preparing'): raise ValueError('job_locked')
+            if not job or job['status'] in ('blocked','sending','preparing') or job['error'] in ('analyzing','analysis_required'): raise ValueError('job_locked')
             path,kind=prepare(job,self._store.settings(),self._store.directory/'prepared')
             return {'filename':path.name,'kind':kind}
         return self._call(build)
@@ -132,16 +137,7 @@ class API:
         else: subprocess.Popen(['xdg-open',folder],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         return {'ok':True}
 
-    def test_ai(self,model):
-        def test():
-            import requests
-            try:
-                result=requests.get('http://127.0.0.1:11434/api/tags',timeout=8);result.raise_for_status()
-                models=[entry['name'] for entry in result.json().get('models',[])]
-            except Exception: raise ValueError('ollama_unavailable') from None
-            if model not in models and model+':latest' not in models: raise ValueError('model_missing')
-            return {'model':model}
-        return self._call(test)
+    def test_ai(self): return self._call(self._engine.test_ai)
 
 
 def main():

@@ -14,7 +14,8 @@ DEFAULTS = {'folder':'','channel':'','tag':'','website':'','times':['09:00','14:
             'timezone':'Asia/Tehran','ai':True,'model':'qwen3-vl:4b','watermark':False,
             'recursive':False,'auto_watch':True,'text_placement':'footer','enabled':False,
             'caption_format':'standard','caption_template':'📄 {title}\n\n{body}\n\n{year} BY {brand} 🦁','brand':'LionXsec',
-            'account_name':'','account_username':'','account_phone':''}
+            'account_name':'','account_username':'','account_phone':'',
+            'ai_provider':'ollama','openai_model':'gpt-4.1-mini'}
 
 
 def data_directory():
@@ -66,6 +67,7 @@ class Store:
         self.path=self.directory/'publisher.sqlite3'
         self.session_path=self.directory/'account-session.dat'
         self.credentials_path=self.directory/'api-credentials.dat'
+        self.openai_key_path=self.directory/'openai-key.dat'
         (self.directory/'prepared').mkdir(exist_ok=True)
         (self.directory/'thumbs').mkdir(exist_ok=True)
         with self.db() as db:
@@ -80,6 +82,10 @@ class Store:
               analysis TEXT NOT NULL DEFAULT '',created REAL NOT NULL,updated REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY,at REAL NOT NULL,level TEXT NOT NULL,text TEXT NOT NULL);
             ''')
+            columns={row['name'] for row in db.execute('PRAGMA table_info(jobs)')}
+            for name in ('content_type','source_date'):
+                if name not in columns:
+                    db.execute(f"ALTER TABLE jobs ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
 
     @contextmanager
     def db(self):
@@ -121,6 +127,11 @@ class Store:
     def session(self): return self.secret(self.session_path)
     def has_session(self): return self.session_path.exists()
     def set_session(self, value): self.set_secret(self.session_path,value)
+
+    def openai_key(self): return self.secret(self.openai_key_path)
+    def has_openai_key(self): return self.openai_key_path.exists()
+    def set_openai_key(self, value): self.set_secret(self.openai_key_path,value)
+    def clear_openai_key(self): self.openai_key_path.unlink(missing_ok=True)
 
     def credentials(self):
         raw=self.secret(self.credentials_path)

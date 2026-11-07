@@ -5,6 +5,7 @@ tests/artifacts/
 *.sqlite3*
 account-session.dat
 api-credentials.dat
+openai-key.dat
 instance.lock
 startup-error.log
 core

@@ -2,16 +2,20 @@
 from functools import partial
 from http.server import ThreadingHTTPServer,SimpleHTTPRequestHandler
 import json
+import os
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 import threading
+from unittest.mock import patch
 
 from PIL import Image,ImageDraw
 from playwright.sync_api import sync_playwright,expect
 
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
 from app import API
+from content import analyze
 from engine import Engine
 from storage import Store,DEFAULTS
 
@@ -36,10 +40,10 @@ with tempfile.TemporaryDirectory() as temp:
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     try:
         with sync_playwright() as p:
-            browser=p.chromium.launch(headless=True,args=['--no-sandbox'])
+            browser=p.chromium.launch(headless=True,executable_path=os.environ.get('CHROMIUM_EXECUTABLE') or shutil.which('chromium'),args=['--no-sandbox'])
             page=browser.new_page(viewport={'width':1440,'height':1080},device_scale_factor=1)
             errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
-            allowed=['snapshot','detail','preview_caption','thumbnail','edit','save_settings','scan','enable','pause','verify','prepare_copy','remove','reanalyze','acknowledge','login_start','login_code','login_password','login_cancel','disconnect_account']
+            allowed=['snapshot','detail','preview_caption','thumbnail','edit','save_settings','scan','enable','pause','verify','prepare_copy','remove','reanalyze','acknowledge','login_start','login_code','login_password','login_cancel','disconnect_account','clear_analysis','save_openai_key','clear_openai_key','test_ai']
             page.expose_function('qaCall',lambda name,args:getattr(api,name)(*args) if name in allowed else None)
             page.add_init_script('window.pywebview={api:Object.fromEntries('+json.dumps(allowed)+'.map(n=>[n,(...a)=>window.qaCall(n,a)]))};')
             page.goto('http://127.0.0.1:'+str(server.server_port),wait_until='networkidle')
@@ -89,7 +93,71 @@ with tempfile.TemporaryDirectory() as temp:
             assert page.locator('#toggle-run').bounding_box()['height']<=50
             page.locator('[data-page=queue]').click();expect(page.locator('#queue-rows tr[data-id]')).to_have_count(6)
             page.locator('#toggle-run').click();expect(page.locator('#state-pill')).to_contain_text('متوقف')
+            # Configure OpenAI through the real settings and API, using an explicit fake key.
+            page.locator('[data-page=settings]').click()
+            page.locator('[name=ai_provider]').select_option('openai')
+            expect(page.locator('#openai-options')).to_be_visible()
+            expect(page.locator('#ollama-options')).to_be_hidden()
+            page.locator('[name=ai]').check()
+            key='sk-ui-fixture-not-a-real-api-key'
+            page.locator('#openai-key').fill(key)
+            with patch('engine.check_openai',return_value={'provider':'openai','model':'gpt-4.1-mini'}) as check:
+                page.locator('#test-ai').click()
+                expect(page.locator('#ai-result')).to_contain_text('OpenAI و مدل')
+                check.assert_called_once_with(key,'gpt-4.1-mini')
+            expect(page.locator('#openai-key')).to_have_value('')
+            expect(page.locator('#openai-key-status')).to_contain_text('کلید ذخیره شده')
+            assert key not in page.evaluate('JSON.stringify(state)')
+            page.screenshot(path=str(ARTIFACTS/'openai-settings.png'),full_page=True)
+            page.locator('#clear-openai-key').click()
+            expect(page.locator('#openai-key-status')).to_contain_text('هنوز کلیدی')
+            page.locator('#openai-key').fill(key)
+            page.locator('#settings-form button[type=submit]').click()
+            expect(page.locator('#openai-key-status')).to_contain_text('کلید ذخیره شده')
+
+            # All remote model responses are simulated; real file parsing and API bridge remain active.
+            def fixture_analyzer(path,kind,config):
+                def transport(payload):
+                    value={'decision':'ready','title':'آموزش '+path.stem,'body':'توضیح آموزشی نمونه',
+                           'reason':'','content_type':'educational','source_date':''}
+                    return {'status':'completed','output':[{'type':'message','content':[
+                        {'type':'output_text','text':json.dumps(value,ensure_ascii=False)}]}]}
+                return analyze(path,kind,config,transport)
+            engine.analyzer=fixture_analyzer
+            originals={p:p.read_bytes() for p in folder.iterdir()}
+            page.locator('[data-page=library]').click()
+            page.locator('#clear-analysis').click();expect(page.locator('#clear-dialog')).to_be_visible()
+            page.screenshot(path=str(ARTIFACTS/'clear-results.png'),full_page=True)
+            page.locator('#clear-confirm').click()
+            expect(page.locator('#clear-dialog')).not_to_be_visible()
+            page.wait_for_function("state.jobs.length===6 && state.jobs.every(j=>j.error==='analysis_required')")
+            assert all(p.read_bytes()==data for p,data in originals.items())
+            page.locator('#scan').click()
+            page.wait_for_function("!state.runtime.scanning && state.jobs.length===6 && state.jobs.every(j=>j.analysis==='openai')")
+            assert all(j['content_type']=='educational' for j in api.snapshot()['jobs'])
+            page.locator('.content-card').first.click()
+            expect(page.locator('#detail-type')).to_contain_text('آموزشی')
+            page.locator('#clear-post').click()
+            expect(page.locator('#detail-error')).to_contain_text('نتیجهٔ قبلی پاک شده')
+            expect(page.locator('#save-post')).to_be_disabled()
+            expect(page.locator('#reanalyze')).to_be_enabled()
+            page.locator('#reanalyze').click()
+            page.wait_for_function("!state.runtime.scanning && state.jobs.every(j=>j.status==='draft')")
+
+            blocked=folder/'blocked.txt';blocked.write_text('password: synthetic-example-only')
+            engine._scan();page.evaluate('refresh()')
+            card=page.locator('.content-card').filter(has_text='blocked.txt')
+            expect(card).to_contain_text('قابل انتشار نیست');card.click()
+            expect(page.locator('#detail-error')).to_contain_text('اطلاعات ورود')
+            expect(page.locator('#reanalyze')).to_be_enabled()
+            blocked.write_text('درس اصلاح‌شده\nآموزش طراحی با نور طبیعی',encoding='utf-8')
+            page.locator('#reanalyze').click()
+            page.wait_for_function("!state.runtime.scanning && state.jobs.length===7 && state.jobs.every(j=>j.status==='draft')")
+            page.screenshot(path=str(ARTIFACTS/'openai-library.png'),full_page=True)
+            for width in [900,1100,1440]:
+                page.set_viewport_size({'width':width,'height':950})
+                assert page.evaluate('document.documentElement.scrollWidth<=innerWidth'),width
             assert not errors,errors
             browser.close()
-            print('PASS: library, settings, account card, login wizard, preview, search, queue, pause, layouts at 900/1100/1440; no JavaScript errors.')
+            print('PASS: library, account/login, OpenAI settings and private key, clear/recheck controls, corrected blocked TXT, metadata, queue/pause and responsive layouts; no JavaScript errors. OpenAI and Telegram calls simulated.')
     finally: server.shutdown();server.server_close()

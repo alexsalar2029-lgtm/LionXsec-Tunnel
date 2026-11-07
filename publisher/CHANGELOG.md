@@ -1,3 +1,12 @@
+# 1.3.0 — OpenAI, clear and recheck
+
+- Add OpenAI Responses API analysis with a configurable model, structured Persian title/caption/category and a date copied from the source. Keep the scheduled publication date tied to the system clock and selected timezone. Preserve optional local Ollama analysis.
+- Add an in-app API key field, connection check and key removal. Store the key separately with Windows DPAPI; never return it in UI snapshots or include provider response bodies in errors. Identify missing keys, authentication failures, quota limits and network failures separately.
+- Add clear/reset for all eligible unsent results or one post, followed by fresh analysis. Pause publishing during manual rescans; retain original files, sent history and in-flight/ambiguous deliveries.
+- Re-read unchanged files on explicit scans, retry blocked TXT, update file type from signatures, reuse unsent records after edits/renames and refresh generated previews. Background scans still skip unchanged files and preserve manual captions.
+- Narrow the email-list check so ordinary prose containing public contact addresses is not blocked just because it contains two addresses. Keep explicit sensitive-data checks and show an actionable reason. A reset requires fresh analysis before editing or preparing a post.
+- Migrate existing databases without discarding settings or jobs. Add Persian setup/retry guidance and 25 regression tests; 89 unit/integration tests, browser UI, native Linux bridge and real FFmpeg checks passed. Live OpenAI, Telegram and Windows execution remain untested here.
+
 # Server 2016 Fix2: missing WebView2 prerequisite
 
 - Detect and report .NET Framework and WebView2 separately before loading the Windows renderer.
