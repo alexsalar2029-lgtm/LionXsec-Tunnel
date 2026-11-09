@@ -16,7 +16,7 @@ DEFAULTS = {'folder':'','channel':'','tag':'','website':'','times':['09:00','14:
             'recursive':False,'auto_watch':True,'text_placement':'footer','enabled':False,
             'caption_format':'standard','caption_template':'📄 {title}\n\n{body}\n\n{year} BY {brand} 🦁','brand':'LionXsec',
             'account_name':'','account_username':'','account_phone':'',
-            'content_restrictions':True,'ai_provider':'ollama','openai_model':'gpt-4.1-mini'}
+            'ai_provider':'ollama','openai_model':'gpt-4.1-mini'}
 
 
 def data_directory():
@@ -88,7 +88,9 @@ class Store:
                     digest=hashlib.sha256((row['path']+'\0'+row['digest']).encode()).hexdigest()
                     db.execute('UPDATE jobs SET digest=? WHERE id=?',(digest,row['id']))
                 db.execute("INSERT INTO settings VALUES('path_digest_v1','true')")
+            if {'status','error'} <= {r['name'] for r in db.execute('PRAGMA table_info(jobs)')}: db.execute("UPDATE jobs SET status='review',error='analysis_required' WHERE status='blocked'")
             columns={row['name'] for row in db.execute('PRAGMA table_info(jobs)')}
+            if 'path' in columns: db.execute('CREATE INDEX IF NOT EXISTS jobs_path_idx ON jobs(path)')
             for name in ('content_type','source_date'):
                 if name not in columns:
                     db.execute(f"ALTER TABLE jobs ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")

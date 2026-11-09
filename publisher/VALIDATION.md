@@ -1,3 +1,7 @@
+# 1.4.0 validation
+
+97 unit/integration tests passed on Linux, including streamed TXT branding for UTF-8/UTF-16/CP1256, long-line link boundaries, source preservation, metadata-only polling, one failed API call per scan and sent-history protection. Browser UI, real Qt WebEngine desktop bridge and real FFmpeg tests passed. OpenAI and Telegram are simulated; Windows Server 2016 and live delivery were not tested. Historical results follow.
+
 # 1.3.3 validation
 
 92 unit/integration tests passed on Linux. Browser smoke passed, including disabling/enabling the content restriction checkbox through the real UI and verifying persisted settings. Media smoke passed with real FFmpeg. JavaScript syntax passed. Remote OpenAI and Telegram calls are simulated; Windows Server 2016 execution and live API delivery were not tested. Historical results follow.

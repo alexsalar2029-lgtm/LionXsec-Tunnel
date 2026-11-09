@@ -8,7 +8,7 @@ import time
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo,ZoneInfoNotFoundError
 
-from content import KINDS,ContentError,analyze,caption,detect_kind,fingerprint,prepare,protected_content,thumbnail,validate_caption_template
+from content import KINDS,ContentError,analyze,fallback,caption,detect_kind,fingerprint,prepare,protected_content,thumbnail,validate_caption_template
 from ai_client import check_openai,validate_key
 from mtproto_client import MTProto,TelegramError,account_label,normalize_api_hash,normalize_api_id,normalize_phone
 from storage import DEFAULTS,atomic_write
@@ -37,13 +37,12 @@ def validate_settings(data):
     times=value['times']
     if not isinstance(times,list) or not 1<=len(times)<=24 or any(not isinstance(t,str) or not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d',t) for t in times): raise ValueError('times_invalid')
     value['times']=sorted(set(times))
-    for key in ['ai','watermark','recursive','auto_watch','content_restrictions']:
+    for key in ['ai','watermark','recursive','auto_watch']:
         if type(value[key]) is not bool: raise ValueError('invalid_settings')
     if value['text_placement'] not in ('header','footer'): raise ValueError('invalid_settings')
     if value['caption_format'] not in ('standard','custom'): raise ValueError('invalid_settings')
     if not 1<=len(value['brand'])<=60 or '\n' in value['brand'] or '\r' in value['brand']: raise ValueError('brand_invalid')
-    if value['content_restrictions'] and protected_content(value['brand']): raise ValueError('sensitive_content')
-    validate_caption_template(value['caption_template'],value['content_restrictions'])
+    validate_caption_template(value['caption_template'])
     value['enabled']=False
     return value
 
@@ -284,7 +283,7 @@ class Engine:
         else:
             source=folder.rglob('*') if config['recursive'] else folder.iterdir()
             paths=sorted((p for p in source if p.is_file() and not p.is_symlink() and not p.name.endswith('.caption.txt') and not p.resolve().is_relative_to(self.store.directory.resolve()) and not any(part in ('.venv','.git') for part in p.parts)),key=lambda p:p.name.lower())
-        self.runtime['total']=len(paths);added=0;checked=0;processed=set()
+        self.runtime['total']=len(paths);added=0;checked=0;processed=set();ai_unavailable=False
         for index,path in enumerate(paths):
             identifier=only_id
             if self.stop_event.is_set(): break
@@ -300,9 +299,7 @@ class Engine:
                     prior=(db.execute('SELECT * FROM jobs WHERE id=?',(only_id,)).fetchone() if only_id is not None
                            else db.execute('SELECT * FROM jobs WHERE path=? ORDER BY id DESC LIMIT 1',(resolved,)).fetchone())
                     if prior and prior['status'] in ('sending','preparing','uncertain'): continue
-                    if prior and prior['status']=='sent':
-                        if only_id is not None or prior['digest']==digest: continue
-                        prior=None  # A changed file is a new publication; keep the sent history.
+                    if prior and prior['status']=='sent': continue
                     if prior and prior['status']=='excluded' and only_id is None: continue
                     if prior:
                         if prior['id'] in processed: continue
@@ -323,9 +320,14 @@ class Engine:
                     analysis_settings=dict(config)
                     if config['ai'] and config['ai_provider']=='openai':
                         analysis_settings['_openai_key']=self.store.openai_key()
+                    if ai_unavailable: analysis_settings['ai']=False
                     result=self.analyzer(path,kind,analysis_settings)
+                    if result.get('analysis','').startswith('fallback:'):
+                        ai_unavailable=True
+                        self.store.event('هوش مصنوعی پاسخ قابل استفاده نداد؛ ادامهٔ این بررسی با متن و نام فایل انجام می‌شود.','warning')
                 except ContentError as error:
-                    result={'status':'review','title':path.stem[:100],'body':'','error':error.code,'analysis':''}
+                    result=fallback(path,reason=error.code)
+                    with self.store.db() as db: db.execute("UPDATE jobs SET kind=? WHERE id=?",('text' if kind=='text' else 'document',identifier))
                 with self.lock,self.store.db() as db:
                     if self.revision!=scan_revision:
                         result={'status':'review','title':'','body':'','error':'analysis_settings_changed','analysis':''}
@@ -371,7 +373,6 @@ class Engine:
 
     def edit(self,identifier,title,body):
         if not isinstance(title,str) or not title.strip() or len(title)>100 or not isinstance(body,str) or len(body)>500: raise ValueError('caption_invalid')
-        if self.store.settings().get('content_restrictions',True) and protected_content(title+'\n'+body): raise ValueError('sensitive_content')
         with self.lock,self.store.db() as db:
             row=db.execute('SELECT * FROM jobs WHERE id=?',(int(identifier),)).fetchone()
             if not row or row['status'] in ('sent','sending','preparing','blocked','uncertain') or row['error'] in ('analyzing','analysis_required'): raise ValueError('job_locked')

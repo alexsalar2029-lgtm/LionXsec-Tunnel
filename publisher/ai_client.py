@@ -38,7 +38,7 @@ def _request(method, path, key, **kwargs):
     try:
         response = requests.request(method, OPENAI_API + path,
                                     headers={'Authorization': 'Bearer ' + key},
-                                    timeout=(10, 180), allow_redirects=False, **kwargs)
+                                    timeout=(3, 20), allow_redirects=False, **kwargs)
     except requests.RequestException:
         raise AIError('openai_unavailable') from None
     codes = {401: 'openai_unauthorized', 403: 'openai_forbidden',

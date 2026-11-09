@@ -35,7 +35,7 @@ class RescanTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
         self.folder=self.root/'input';self.folder.mkdir();self.store=Store(self.root/'data')
         self.engine=Engine(self.store)
-        self.engine.save_settings({**DEFAULTS,'folder':str(self.folder),'ai':False,'auto_watch':False})
+        self.engine.save_settings({**DEFAULTS,'folder':str(self.folder),'ai':False,'auto_watch':False,'channel':'@example_channel'})
         self.api=API(self.store,self.engine)
 
     def tearDown(self):
@@ -67,18 +67,18 @@ class RescanTests(unittest.TestCase):
 
     def test_blocked_txt_can_be_rechecked_after_source_correction(self):
         path=self.source(text='password: synthetic-example-only');self.engine._scan()
-        self.assertEqual(self.store.job(1)['status'],'blocked')
+        self.assertEqual(self.store.job(1)['status'],'draft')
         path.write_text('درس اصلاح‌شده\nمتن عادی آموزشی',encoding='utf-8')
         self.assertTrue(self.api.reanalyze(1)['ok']);self.wait_scan()
         self.assertEqual(len(self.jobs()),1)
         self.assertEqual(self.store.job(1)['status'],'draft')
         self.assertEqual(self.store.job(1)['title'],'درس اصلاح‌شده')
 
-    def test_rechecking_sensitive_txt_keeps_it_blocked(self):
+    def test_rechecking_text_has_no_local_content_gate(self):
         self.source(text='password: synthetic-example-only');self.engine._scan()
         self.engine._scan(recheck=True)
-        self.assertEqual(self.store.job(1)['status'],'blocked')
-        self.assertEqual(self.store.job(1)['error'],'sensitive_credentials')
+        self.assertEqual(self.store.job(1)['status'],'draft')
+        self.assertEqual(self.store.job(1)['error'],'')
 
     def test_clear_preserves_sources_and_sent_uncertain_inflight_history(self):
         paths=[self.source(f'lesson-{i}.txt',f'Lesson {i}\nOrdinary notes') for i in range(6)]
@@ -96,12 +96,12 @@ class RescanTests(unittest.TestCase):
         self.assertFalse(self.api.edit(1,'Override','Body')['ok'])
         self.assertFalse(self.api.prepare_copy(1)['ok'])
 
-    def test_clear_sensitive_txt_requires_fresh_analysis_and_does_not_bypass_checks(self):
+    def test_cleared_text_requires_analysis_before_preparation(self):
         self.source(text='password: synthetic-example-only');self.engine._scan()
         self.engine.clear_analysis(1)
         self.assertEqual(self.store.job(1)['title'],'')
         self.assertFalse(self.api.edit(1,'Override','Body')['ok'])
-        self.engine._scan();self.assertEqual(self.store.job(1)['status'],'blocked')
+        self.engine._scan();self.assertEqual(self.store.job(1)['status'],'draft')
 
     def test_clear_removes_only_generated_files_for_selected_job(self):
         path=self.source();self.engine._scan();job=self.store.job(1)
@@ -184,11 +184,11 @@ class RescanTests(unittest.TestCase):
         self.assertEqual(request.call_args.kwargs['headers']['Authorization'],'Bearer '+KEY)
         self.assertFalse(request.call_args.kwargs['allow_redirects'])
 
-    def test_missing_openai_key_is_reviewable_not_permanently_blocked(self):
+    def test_missing_openai_key_produces_local_draft(self):
         self.source();self.engine.save_settings({**self.store.settings(),'ai':True,'ai_provider':'openai'})
         with patch('ai_client.requests.request') as request: self.engine._scan()
-        request.assert_not_called();self.assertEqual(self.store.job(1)['status'],'review')
-        self.assertEqual(self.store.job(1)['error'],'openai_key_missing')
+        request.assert_not_called();self.assertEqual(self.store.job(1)['status'],'draft')
+        self.assertEqual(self.store.job(1)['analysis'],'fallback:openai_key_missing')
 
     def test_schema_migration_preserves_old_job(self):
         directory=self.root/'legacy';directory.mkdir()
@@ -241,7 +241,7 @@ class OpenAIContractTests(unittest.TestCase):
             path=Path(directory)/'lesson.txt';path.write_text('Ordinary text')
             raw={'output':[{'type':'message','content':[{'type':'refusal','refusal':'No'}]}]}
             result=analyze(path,'text',{**DEFAULTS,'ai_provider':'openai','content_restrictions':False},lambda _:raw)
-            self.assertEqual(result['status'],'draft');self.assertEqual(result['title'],'lesson')
+            self.assertEqual(result['status'],'draft');self.assertEqual(result['title'],'Ordinary text')
 
     def test_source_date_cannot_be_invented_for_txt(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -250,12 +250,12 @@ class OpenAIContractTests(unittest.TestCase):
                            lambda _:response_body(source_date='2040-12-01'))
             self.assertEqual(result['source_date'],'')
 
-    def test_sensitive_source_is_not_sent_to_openai(self):
+    def test_no_local_content_gate_before_selected_ai(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'private.txt';path.write_text('password: synthetic-example-only')
-            transport=Mock(side_effect=AssertionError('Sensitive source must stay local'))
+            transport=Mock(return_value=response_body())
             result=analyze(path,'text',{**DEFAULTS,'ai_provider':'openai'},transport)
-            self.assertEqual(result['status'],'blocked');transport.assert_not_called()
+            self.assertEqual(result['status'],'draft');transport.assert_called_once()
 
 
 if __name__=='__main__': unittest.main()

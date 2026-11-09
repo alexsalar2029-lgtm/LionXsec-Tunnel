@@ -98,7 +98,7 @@ class PublisherTests(unittest.TestCase):
             prepared,kind=prepare(job,{**self.config,'text_placement':placement},self.store.directory/'prepared')
             output=prepared.read_bytes().decode('utf-8-sig')
             self.assertIn(text,output);self.assertEqual(kind,'document')
-            self.assertIn('https://example.com',output)
+            self.assertNotIn('https://example.com',output)
             self.assertTrue(output.startswith('@example_channel') if placement=='header' else output.startswith(text))
             self.assertEqual(path.read_bytes(),original)
         self.assertNotEqual(path,prepared)
@@ -150,15 +150,15 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(job['status'],'scheduled');self.assertGreater(job['scheduled'],self.now+90)
         self.assertEqual(datetime.fromtimestamp(job['scheduled'],ZoneInfo('Asia/Tehran')).strftime('%H:%M'),'14:00')
 
-    def test_nofingerprint_sends_current_file_but_filter_blocks_sensitive_source(self):
+    def test_current_source_and_new_files_are_accepted(self):
         path=self.source();self.scan();self.due();path.write_text('Changed data',encoding='utf-8')
         self.engine.tick();self.assertEqual(self.store.job(1)['status'],'sent');self.assertIn(b'Changed data',self.publisher().deliveries[0]['bytes'])
         self.source('private.txt','password: synthetic-example-only')
-        jobs=self.scan();self.assertTrue(any(j['status']=='blocked' for j in jobs))
+        jobs=self.scan();self.assertTrue(any(j['filename']=='private.txt' and j['status'] in ('draft','scheduled') for j in jobs))
 
-    def test_content_filter_can_be_disabled_and_reenabled(self):
+    def test_legacy_filter_values_do_not_reenable_filtering(self):
         self.source(text='password: synthetic-example-only')
-        self.scan();self.assertEqual(self.store.job(1)['status'],'blocked')
+        self.scan();self.assertEqual(self.store.job(1)['status'],'draft')
         self.config['content_restrictions']=False
         self.engine.save_settings(self.config);self.engine._scan(recheck=True)
         self.assertEqual(self.store.job(1)['status'],'draft')
@@ -168,13 +168,12 @@ class PublisherTests(unittest.TestCase):
         self.assertIn(b'password:',self.publisher().deliveries[0]['bytes'])
         self.config['content_restrictions']=True;self.engine.save_settings(self.config)
         self.source('another.txt','password: another-synthetic-example')
-        self.assertTrue(any(j['status']=='blocked' for j in self.scan()))
+        self.assertTrue(any(j['status']=='draft' for j in self.scan()))
 
-    def test_filter_setting_persists_and_rejects_non_boolean(self):
-        self.engine.save_settings({**self.config,'content_restrictions':False})
-        self.assertFalse(Store(self.store.directory).settings()['content_restrictions'])
-        with self.assertRaises(ValueError):
-            self.engine.save_settings({**self.config,'content_restrictions':'false'})
+    def test_old_filter_setting_is_ignored(self):
+        self.engine.save_settings({**self.config,'content_restrictions':True})
+        self.assertNotIn('content_restrictions',Store(self.store.directory).settings())
+
 
     def test_excluding_during_analysis_is_not_undone_by_result(self):
         self.source()
@@ -246,10 +245,10 @@ class PublisherTests(unittest.TestCase):
             with self.subTest(template=template),self.assertRaisesRegex(ValueError,'caption_template_invalid'):
                 self.engine.save_settings({**self.config,'caption_template':template})
 
-    def test_email_collections_are_not_turned_into_promotional_posts(self):
+    def test_text_is_not_classified_by_local_filter(self):
         self.source(text='first@example.invalid\nsecond@example.invalid')
         self.engine.save_settings({**self.config,'caption_format':'custom'})
-        self.assertEqual(self.scan()[0]['status'],'blocked')
+        self.assertEqual(self.scan()[0]['status'],'draft')
         self.engine.enable();self.assertFalse(self.engine.tick());self.assertEqual(self.publisher().deliveries,[])
 
     def test_unsaved_caption_preview_does_not_change_job(self):

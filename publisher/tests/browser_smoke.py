@@ -94,14 +94,7 @@ with tempfile.TemporaryDirectory() as temp:
             page.locator('[data-page=queue]').click();expect(page.locator('#queue-rows tr[data-id]')).to_have_count(6)
             page.locator('#toggle-run').click();expect(page.locator('#state-pill')).to_contain_text('متوقف')
             page.locator('[data-page=settings]').click()
-            page.locator('[name=content_restrictions]').uncheck()
-            page.locator('#settings-form button[type=submit]').click()
-            page.wait_for_function("state.settings.content_restrictions === false")
-            assert store.settings()['content_restrictions'] is False
-            page.screenshot(path=str(ARTIFACTS/'content-filter-disabled.png'),full_page=True)
-            page.locator('[name=content_restrictions]').check()
-            page.locator('#settings-form button[type=submit]').click()
-            page.wait_for_function("state.settings.content_restrictions === true")
+            assert page.locator('[name=content_restrictions]').count()==0
             # Configure OpenAI through the real settings and API, using an explicit fake key.
             page.locator('[data-page=settings]').click()
             page.locator('[name=ai_provider]').select_option('openai')
@@ -156,8 +149,8 @@ with tempfile.TemporaryDirectory() as temp:
             blocked=folder/'blocked.txt';blocked.write_text('password: synthetic-example-only')
             engine._scan();page.evaluate('refresh()')
             card=page.locator('.content-card').filter(has_text='blocked.txt')
-            expect(card).to_contain_text('قابل انتشار نیست');card.click()
-            expect(page.locator('#detail-error')).to_contain_text('اطلاعات ورود')
+            expect(card).to_contain_text('پیش‌نویس');card.click()
+            expect(page.locator('#save-post')).to_be_enabled()
             expect(page.locator('#reanalyze')).to_be_enabled()
             blocked.write_text('درس اصلاح‌شده\nآموزش طراحی با نور طبیعی',encoding='utf-8')
             page.locator('#reanalyze').click()

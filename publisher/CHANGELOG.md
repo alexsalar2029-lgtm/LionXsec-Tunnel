@@ -1,3 +1,10 @@
+# 1.4.0 — Faster intake and TXT channel branding
+
+- Remove internal semantic content gates and migrate previously blocked jobs to fresh analysis. Retain actual I/O, configuration and delivery-error handling.
+- Replace full-file polling hashes with stat metadata; preserve sent-path history across this change. Shorten AI request timeouts and use local drafts on AI failure, with one failed attempt per scan before local fallback.
+- Stream TXT output through channel-reference cleanup across UTF-8, UTF-16 and CP1256. Strip Telegram handles, links and explicit channel promotion lines; preserve email addresses and source files. Brand output filenames and text with the destination channel identity. Large texts no longer bypass cleanup.
+- Add regression coverage for encoding, large-line boundaries, stat-only scanning, outage fallback and sent-path preservation.
+
 # 1.3.3 — Optional content restrictions
 
 - Add a persisted content restriction checkbox, enabled by default. Apply it consistently to intake, editing, templates and preparation. Provider refusals use a filename draft when disabled.

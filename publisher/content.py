@@ -38,10 +38,7 @@ Copy an explicit date from the source verbatim into source_date (<=80 characters
 string when there is no explicit date. Never invent a date or use today's date as a source date.
 For clear ordinary educational, creative, personal or product content, produce a useful title and summary.
 If evidence is insufficient or frames unreadable use review, reason unclear_content.
-Use blocked for credentials, tokens, session cookies, personal financial/identity records, stolen-account
-offers, credential combos/hits, account-checking or credential-stuffing configurations and their sale ads,
-including claims of such goods being sold. Do not turn those into promotional copy.
-For blocked use reason sensitive_content and empty title/body.'''
+'''
 
 
 class ContentError(Exception):
@@ -49,14 +46,12 @@ class ContentError(Exception):
 
 
 def fingerprint(path):
-    h=hashlib.sha256()
-    with Path(path).open('rb') as source:
-        for chunk in iter(lambda:source.read(1024*1024),b''): h.update(chunk)
+    # Constant-time change detection; do not read entire videos on every poll.
+    path=Path(path);stat=path.stat();parts=[stat.st_size,stat.st_mtime_ns]
     sidecar=Path(str(path)+'.caption.txt')
     if sidecar.exists():
-        if sidecar.stat().st_size>2*1024*1024: raise ContentError('text_too_large')
-        h.update(b'\0caption\0'+sidecar.read_bytes())
-    return h.hexdigest()
+        stat=sidecar.stat();parts.extend([stat.st_size,stat.st_mtime_ns])
+    return hashlib.sha256(repr(parts).encode()).hexdigest()
 
 
 def utf16len(value): return len(value.encode('utf-16-le'))//2
@@ -65,27 +60,8 @@ def trim(value,limit):
     return value
 
 
-def sensitive_reason(text):
-    # Do not turn personal email collections into automatic channel posts.
-    emails=set(re.findall(r'(?i)\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b',text))
-    email_pattern=r'(?i)[\w.+-]+@[\w.-]+\.[a-z]{2,}'
-    email_lines=[line for line in text.splitlines() if re.search(email_pattern,line)
-                 and not re.sub(email_pattern,'',line).strip(' ,;|\t')]
-    if len(emails)>=2 and sum(len(re.findall(email_pattern,line)) for line in email_lines)>=2:
-        return 'sensitive_contact_list'
-    credentials=[r'(?i)\b(?:password|passwd|api[_ -]?key|access[_ -]?token|session[_ -]?cookie)\s*[:=]\s*\S+',
-                 r'(?im)^\s*[\w.+-]+@[\w.-]+\.[a-z]{2,}\s*[:|]\s*\S+\s*$']
-    if any(re.search(rule,text) for rule in credentials): return 'sensitive_credentials'
-    rules=[
-           r'\b\d{3}-\d{2}-\d{4}\b',r'(?i)\bSSN\s*[:=]\s*\d{9}\b',
-           r'(?i)\b(?:sold|buy|sell|sale|shop|stock)\b.{0,80}\b(?:combo|hits)\b',
-           r'(?i)\b(?:combo|hits)\b.{0,80}\b(?:paypal|hotmail|netflix|login|account|password)\b',
-           r'(?i)\b(?:credential[- ]stuffing|stolen accounts?|session dumps?)\b',
-           r'(?is)\[SETTINGS\].*\[SCRIPT\]']
-    return 'sensitive_content' if any(re.search(rule,text,re.S) for rule in rules) else ''
-
-
-def protected_content(text): return bool(sensitive_reason(text))
+def sensitive_reason(text): return ''
+def protected_content(text): return False
 
 
 def detect_kind(path):
@@ -143,10 +119,10 @@ def video_info(path):
     finally: reader.close()
 
 
-def video_frames(path):
+def video_frames(path,limit=3):
     info=video_info(path);duration=max(0,float(info.get('duration',0)))
     frames=[];exe=imageio_ffmpeg.get_ffmpeg_exe()
-    for seconds in [min(1,duration*.1),duration*.5,duration*.85]:
+    for seconds in [min(1,duration*.1),duration*.5,duration*.85][:limit]:
         cmd=[exe,'-v','error','-ss',str(seconds),'-i',str(path),'-frames:v','1','-vf',
              'scale=800:800:force_original_aspect_ratio=decrease','-f','image2pipe','-vcodec','mjpeg','pipe:1']
         try:
@@ -161,17 +137,15 @@ def video_frames(path):
 def thumbnail(path,kind):
     try:
         if kind=='photo': return jpeg_bytes(path,420)
-        if kind=='video': return video_frames(path)[0]
+        if kind=='video': return video_frames(path,limit=1)[0]
     except Exception: return None
     return None
 
 
 def analyze(path,kind,settings,transport=None):
     text=source_text(path,kind)
-    prompt=AI_PROMPT if settings.get('content_restrictions',True) else AI_PROMPT.split('Use blocked for credentials')[0]
+    prompt=AI_PROMPT
     name=Path(path).stem
-    reason=sensitive_reason(name+'\n'+text)
-    if settings.get('content_restrictions',True) and reason: return {'status':'blocked','error':reason,'title':'','body':'','analysis':'checked'}
     if not settings['ai'] or (kind=='document' and not text):
         lines=[x.strip('# *\t') for x in text.splitlines() if x.strip()]
         title=(lines[0] if lines else re.sub(r'[_-]+',' ',name))[:100]
@@ -194,36 +168,28 @@ def analyze(path,kind,settings,transport=None):
         else:
             if transport: raw=transport(payload)
             else:
-                response=requests.post('http://127.0.0.1:11434/api/chat',json=payload,timeout=(5,600))
+                response=requests.post('http://127.0.0.1:11434/api/chat',json=payload,timeout=(3,20))
                 response.raise_for_status();raw=response.json()
             result=json.loads(raw['message']['content'])
         if result.get('decision') not in ('ready','review','blocked'): raise ValueError()
-        if result['decision']=='blocked' and not settings.get('content_restrictions',True):
-            return {'status':'draft','error':'','title':name[:100] or Path(path).name[:100],'body':'','analysis':'filename','content_type':'other','source_date':''}
-        if result['decision']=='blocked': return {'status':'blocked','error':'ai_flagged_content','title':'','body':'','analysis':provider}
-        if result['decision']=='review':
-            # The model could not read enough evidence; fall back to a filename draft instead of blocking.
-            return {'status':'draft','error':'','title':re.sub(r'[_-]+',' ',name).strip()[:100],'body':'',
-                    'analysis':provider,'content_type':'other','source_date':''}
+        if result['decision'] in ('blocked','review'): return fallback(path,text,'ai_no_caption')
         title=result['title'];body=result['body']
         if not isinstance(title,str) or not title.strip() or not isinstance(body,str): raise ValueError()
-        reason=sensitive_reason(title+'\n'+body)
-        if settings.get('content_restrictions',True) and reason: return {'status':'blocked','error':reason,'title':'','body':'','analysis':provider}
         content_type=result.get('content_type','other');source_date=result.get('source_date','')
         if content_type not in CONTENT_TYPES or not isinstance(source_date,str) or len(source_date)>80: raise ValueError()
         if kind in ('text','document') and source_date and source_date not in text:
             source_date=''
         return {'status':'draft','error':'','title':title.strip()[:100],'body':body.strip()[:500],'analysis':provider,
                 'content_type':content_type,'source_date':source_date.strip()}
-    except AIError as error:
-        if error.code=='ai_flagged_content' and not settings.get('content_restrictions',True):
-            return {'status':'draft','error':'','title':name[:100] or Path(path).name[:100],'body':'','analysis':'filename','content_type':'other','source_date':''}
-        if error.code=='ai_flagged_content':
-            return {'status':'blocked','error':error.code,'title':'','body':'','analysis':'openai'}
-        raise ContentError(error.code) from None
-    except ContentError: raise
-    except requests.RequestException: raise ContentError('ollama_unavailable') from None
-    except (KeyError,ValueError,TypeError): raise ContentError('ai_invalid_response') from None
+    except AIError as error: return fallback(path,text,error.code)
+    except requests.RequestException: return fallback(path,text,'ai_unavailable')
+    except (KeyError,ValueError,TypeError,AttributeError): return fallback(path,text,'ai_invalid_response')
+
+
+def fallback(path,text='',reason=''):
+    lines=[line.strip('# *\t') for line in text.splitlines() if line.strip()]
+    return {'status':'draft','error':'','title':(lines[0] if lines else Path(path).stem)[:100] or 'File',
+            'body':'\n'.join(lines[1:])[:500],'analysis':'fallback:'+reason,'content_type':'other','source_date':''}
 
 
 CAPTION_FIELDS={'title','body','filename','year','brand','content_type','source_date','file_type'}
@@ -236,11 +202,14 @@ def validate_caption_template(template,restricted=True):
     residue=re.sub(r'\{[^{}]*\}','',template)
     if any(key not in CAPTION_FIELDS for key in tokens) or '{' in residue or '}' in residue:
         raise ValueError('caption_template_invalid')
-    if restricted and protected_content(template): raise ValueError('sensitive_content')
     return template
 
 
 def caption(job,settings,when):
+    if job.get('kind')=='text':
+        from text_branding import clean_references
+        job=dict(job)
+        for key in ('title','body','filename'): job[key]=clean_references(job.get(key,''))
     local=datetime.fromtimestamp(when,ZoneInfo(settings['timezone']))
     date=jdatetime.datetime.fromgregorian(datetime=local).strftime('%Y/%m/%d • %H:%M')
     footer=''
@@ -259,7 +228,6 @@ def caption(job,settings,when):
                 'file_type':Path(job.get('filename','')).suffix.lstrip('.').upper()}
         # A single substitution pass: source text is never evaluated as a template.
         result=re.sub(r'\{([^{}]*)\}',lambda m:values[m.group(1)],template).strip()
-        if settings.get('content_restrictions',True) and protected_content(result): raise ContentError('sensitive_content')
         return trim(result,max(0,limit-utf16len(footer)))+footer
     title=trim(job['title'],140)
     body=trim(job['body'],max(0,limit-utf16len(title+footer)-2))
@@ -281,30 +249,10 @@ def stamp_image(width,settings):
 def _prepare(job,settings,output_dir):
     path=Path(job['path']);dest=Path(output_dir)
     if not path.is_file(): raise ContentError('file_missing')
-    reason=sensitive_reason(job['title']+'\n'+job['body']+'\n'+source_text(path,job['kind'])) if settings.get('content_restrictions',True) else ''
-    if settings.get('content_restrictions',True) and reason: raise ContentError(reason)
     watermark=settings['watermark'] and (settings['tag'] or settings['website'])
     if job['kind']=='text':
-        links='\n'.join(x for x in [settings['tag'],settings['website']] if x)
-        result=dest/(str(job['id'])+'-'+path.name)
-        raw=path.read_bytes() if path.stat().st_size<=16*1024*1024 else None
-        if raw is not None:
-            encodings=('utf-16',) if raw.startswith((b'\xff\xfe',b'\xfe\xff')) else ('utf-8-sig','cp1256')
-            original=None
-            for encoding in encodings:
-                try: original=raw.decode(encoding);break
-                except UnicodeError: pass
-            if original is None: raise ContentError('text_encoding')
-            newline='\r\n' if '\r\n' in original else '\n'
-            block=links.replace('\n',newline)
-            if not block: edited=original
-            elif settings.get('text_placement')=='header': edited=block+newline*2+original
-            else: edited=original+newline*2+block+newline
-            result.write_bytes(edited.encode('utf-8-sig'))
-            return result,'document'
-        # Large text stays byte-for-byte intact; links remain in the caption.
-        shutil.copyfile(path,result)
-        return result,'document'
+        from text_branding import prepare_text
+        return prepare_text(path,settings,dest,job['id']),'document'
     if job['kind']=='photo':
         with Image.open(path) as original:
             image=ImageOps.exif_transpose(original).convert('RGB');image.thumbnail((2560,2560))
