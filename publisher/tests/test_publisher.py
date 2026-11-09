@@ -103,9 +103,9 @@ class PublisherTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(),original)
         self.assertNotEqual(path,prepared)
 
-    def test_scan_is_deduplicated_and_unknown_svb_is_not_processed(self):
+    def test_scan_tracks_each_path_and_accepts_unknown_documents(self):
         self.source();self.source('copy.txt');self.source('unknown.svb','opaque format')
-        self.assertEqual(len(self.scan()),1);self.assertEqual(len(self.scan()),1)
+        self.assertEqual(len(self.scan()),3);self.assertEqual(len(self.scan()),3)
         self.assertFalse(self.store.settings()['enabled']);self.assertEqual(self.publisher().deliveries,[])
 
     def test_schedule_slots_use_tehran_timezone_and_do_not_collide(self):
@@ -150,11 +150,31 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(job['status'],'scheduled');self.assertGreater(job['scheduled'],self.now+90)
         self.assertEqual(datetime.fromtimestamp(job['scheduled'],ZoneInfo('Asia/Tehran')).strftime('%H:%M'),'14:00')
 
-    def test_changed_file_and_sensitive_file_are_never_sent(self):
+    def test_nofingerprint_sends_current_file_but_filter_blocks_sensitive_source(self):
         path=self.source();self.scan();self.due();path.write_text('Changed data',encoding='utf-8')
-        self.engine.tick();self.assertEqual(self.store.job(1)['status'],'review');self.assertEqual(self.publisher().deliveries,[])
+        self.engine.tick();self.assertEqual(self.store.job(1)['status'],'sent');self.assertIn(b'Changed data',self.publisher().deliveries[0]['bytes'])
         self.source('private.txt','password: synthetic-example-only')
         jobs=self.scan();self.assertTrue(any(j['status']=='blocked' for j in jobs))
+
+    def test_content_filter_can_be_disabled_and_reenabled(self):
+        self.source(text='password: synthetic-example-only')
+        self.scan();self.assertEqual(self.store.job(1)['status'],'blocked')
+        self.config['content_restrictions']=False
+        self.engine.save_settings(self.config);self.engine._scan(recheck=True)
+        self.assertEqual(self.store.job(1)['status'],'draft')
+        self.engine.edit(1,'Example','password: synthetic-example-only')
+        self.due();self.engine.tick()
+        self.assertEqual(self.store.job(1)['status'],'sent')
+        self.assertIn(b'password:',self.publisher().deliveries[0]['bytes'])
+        self.config['content_restrictions']=True;self.engine.save_settings(self.config)
+        self.source('another.txt','password: another-synthetic-example')
+        self.assertTrue(any(j['status']=='blocked' for j in self.scan()))
+
+    def test_filter_setting_persists_and_rejects_non_boolean(self):
+        self.engine.save_settings({**self.config,'content_restrictions':False})
+        self.assertFalse(Store(self.store.directory).settings()['content_restrictions'])
+        with self.assertRaises(ValueError):
+            self.engine.save_settings({**self.config,'content_restrictions':'false'})
 
     def test_excluding_during_analysis_is_not_undone_by_result(self):
         self.source()

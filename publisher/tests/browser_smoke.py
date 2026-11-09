@@ -93,6 +93,15 @@ with tempfile.TemporaryDirectory() as temp:
             assert page.locator('#toggle-run').bounding_box()['height']<=50
             page.locator('[data-page=queue]').click();expect(page.locator('#queue-rows tr[data-id]')).to_have_count(6)
             page.locator('#toggle-run').click();expect(page.locator('#state-pill')).to_contain_text('متوقف')
+            page.locator('[data-page=settings]').click()
+            page.locator('[name=content_restrictions]').uncheck()
+            page.locator('#settings-form button[type=submit]').click()
+            page.wait_for_function("state.settings.content_restrictions === false")
+            assert store.settings()['content_restrictions'] is False
+            page.screenshot(path=str(ARTIFACTS/'content-filter-disabled.png'),full_page=True)
+            page.locator('[name=content_restrictions]').check()
+            page.locator('#settings-form button[type=submit]').click()
+            page.wait_for_function("state.settings.content_restrictions === true")
             # Configure OpenAI through the real settings and API, using an explicit fake key.
             page.locator('[data-page=settings]').click()
             page.locator('[name=ai_provider]').select_option('openai')

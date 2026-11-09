@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b0c0f"><title>LIONXSEC Publisher</title><link rel="stylesheet" href="style.css?v=1.3.0"><script defer src="app.js?v=1.3.0"></script></head>
+<html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b0c0f"><title>LIONXSEC Publisher</title><link rel="stylesheet" href="style.css?v=1.3.3"><script defer src="app.js?v=1.3.3"></script></head>
 <body>
 <div id="boot" class="boot"><div class="boot-symbol">L<span>✦</span></div><b>LIONXSEC PUBLISHER</b><p id="boot-message">در حال باز کردن فضای کاری…</p><small>با فایل START-LIONXSEC.cmd اجرا کنید.</small></div>
 <aside class="sidebar">
@@ -68,7 +68,7 @@
    <div class="settings-card"><div class="settings-title"><span class="stat-icon green"><i data-icon="spark"></i></span><div><h2>هوش مصنوعی محتوا</h2><p>عنوان، کپشن، نوع محتوا و تاریخ درج‌شده در منبع.</p></div></div>
     <label class="check-label"><input type="checkbox" name="ai"><span>تولید و دسته‌بندی خودکار محتوا</span></label>
     <label>سرویس هوش مصنوعی<select name="ai_provider"><option value="openai">OpenAI API</option><option value="ollama">Ollama — مدل محلی</option></select></label>
-    <div id="openai-options" hidden>
+    <label class="check-label"><input type="checkbox" name="content_restrictions"><span>محدودیت محتوای قابل انتشار</span></label><p class="field-help">با خاموش‌کردن، فیلتر محتوایی برنامه غیرفعال می‌شود. پس از ذخیره، «بررسی محتوا» را بزن. همهٔ پسوندها پذیرفته می‌شوند؛ فایل ناشناخته به‌صورت پیوست ارسال می‌شود. محدودیت سرویس‌ها برقرار است؛ اگر AI محتوا را تأیید نکند، عنوان از نام فایل ساخته می‌شود.</p><div id="openai-options" hidden>
      <label>مدل OpenAI<input name="openai_model" dir="ltr" placeholder="gpt-4.1-mini" maxlength="100"></label>
      <label>کلید API<input id="openai-key" name="openai_api_key" type="password" dir="ltr" autocomplete="off" maxlength="4096" placeholder="sk-…"></label>
      <p class="field-help" id="openai-key-status"></p><button type="button" id="clear-openai-key" class="text-button danger">حذف کلید ذخیره‌شده</button>

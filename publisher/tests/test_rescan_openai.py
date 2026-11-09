@@ -123,10 +123,10 @@ class RescanTests(unittest.TestCase):
         self.assertEqual(job['size'],path.stat().st_size)
         self.assertTrue((self.store.directory/'thumbs'/'1.jpg').exists())
 
-    def test_renamed_unsent_file_reuses_record_and_updates_filename(self):
+    def test_renamed_file_has_new_path_record_without_fingerprint_deduplication(self):
         path=self.source();self.engine._scan();path.rename(self.folder/'renamed.md')
         self.engine._scan(recheck=True)
-        self.assertEqual(len(self.jobs()),1);self.assertEqual(self.store.job(1)['filename'],'renamed.md')
+        self.assertEqual(len(self.jobs()),2);self.assertEqual(self.store.job(2)['filename'],'renamed.md')
 
     def test_rescan_never_republishes_sent_or_uncertain_content(self):
         self.source();self.engine._scan()
@@ -235,6 +235,13 @@ class OpenAIContractTests(unittest.TestCase):
         for raw,expected in cases:
             with self.subTest(expected=expected),self.assertRaisesRegex(AIError,expected):
                 openai_analysis('Prompt','lesson.txt','text','Text',[],'gpt-4.1-mini',KEY,lambda _:raw)
+
+    def test_unrestricted_mode_uses_filename_when_provider_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'lesson.txt';path.write_text('Ordinary text')
+            raw={'output':[{'type':'message','content':[{'type':'refusal','refusal':'No'}]}]}
+            result=analyze(path,'text',{**DEFAULTS,'ai_provider':'openai','content_restrictions':False},lambda _:raw)
+            self.assertEqual(result['status'],'draft');self.assertEqual(result['title'],'lesson')
 
     def test_source_date_cannot_be_invented_for_txt(self):
         with tempfile.TemporaryDirectory() as directory:

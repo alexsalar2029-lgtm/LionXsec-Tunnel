@@ -1,5 +1,6 @@
 """Local persistence, protected account secrets and serialized job state."""
 import base64
+import hashlib
 import ctypes
 from ctypes import wintypes
 from contextlib import contextmanager
@@ -15,7 +16,7 @@ DEFAULTS = {'folder':'','channel':'','tag':'','website':'','times':['09:00','14:
             'recursive':False,'auto_watch':True,'text_placement':'footer','enabled':False,
             'caption_format':'standard','caption_template':'📄 {title}\n\n{body}\n\n{year} BY {brand} 🦁','brand':'LionXsec',
             'account_name':'','account_username':'','account_phone':'',
-            'ai_provider':'ollama','openai_model':'gpt-4.1-mini'}
+            'content_restrictions':True,'ai_provider':'ollama','openai_model':'gpt-4.1-mini'}
 
 
 def data_directory():
@@ -82,6 +83,11 @@ class Store:
               analysis TEXT NOT NULL DEFAULT '',created REAL NOT NULL,updated REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY,at REAL NOT NULL,level TEXT NOT NULL,text TEXT NOT NULL);
             ''')
+            if {'path','digest'} <= {r['name'] for r in db.execute('PRAGMA table_info(jobs)')} and not db.execute("SELECT 1 FROM settings WHERE key='path_digest_v1'").fetchone():
+                for row in db.execute('SELECT id,path,digest FROM jobs').fetchall():
+                    digest=hashlib.sha256((row['path']+'\0'+row['digest']).encode()).hexdigest()
+                    db.execute('UPDATE jobs SET digest=? WHERE id=?',(digest,row['id']))
+                db.execute("INSERT INTO settings VALUES('path_digest_v1','true')")
             columns={row['name'] for row in db.execute('PRAGMA table_info(jobs)')}
             for name in ('content_type','source_date'):
                 if name not in columns:

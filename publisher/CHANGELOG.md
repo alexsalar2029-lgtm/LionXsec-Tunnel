@@ -1,3 +1,23 @@
+# 1.3.3 — Optional content restrictions
+
+- Add a persisted content restriction checkbox, enabled by default. Apply it consistently to intake, editing, templates and preparation. Provider refusals use a filename draft when disabled.
+- Incorporate the supplied 1.3.2 archive. Fix path-scoped duplicate identities and preserve large-text encoding by copying bytes unchanged.
+- Adapt regression assertions to the supplied no-fingerprint behavior; add filter persistence, toggle and provider-refusal coverage.
+
+# 1.3.2 — No fingerprint gating, softer AI flow
+
+- Remove the fingerprint change guard: files are prepared and published even if their bytes changed after analysis (file_changed is gone). The digest stays in the database only as metadata.
+- Remove duplicate-content detection: identical files under different names are no longer marked duplicate_content; each path is judged on its own record. Sent files at the same path are still skipped until the result is cleared.
+- An AI "review" decision now falls back to a filename-based draft instead of failing with unclear_content.
+- The sensitive-data guard is unchanged and fully active: credentials, contact lists, combo/hits material and similar content stay blocked at analysis, preparation and caption layers.
+
+# 1.3.1 — Unrestricted file types and sizes
+
+- Accept every file extension: known types keep photo/video/text handling, unknown extensions are sent as plain documents with their original name. Header-based detection (JPEG/PNG/WebP, MP4/EBML, PDF) still overrides the extension.
+- Remove the 49 MB application cap everywhere (folder scan and preparation). Telegram's own per-account limit (2 GB regular, 4 GB Premium) is now the only boundary; oversized uploads fail with Telegram's response.
+- Read only the first 2 MB of text files for AI analysis instead of rejecting larger files; the full file is still published. Text files over 16 MB stream through untouched with signature links written around the copy.
+- Keep the sensitive-data guard (credentials, contact lists) and the digest/fingerprint change check fully active. Scale video re-encode timeout with file size (15 min per 300 MB, capped at 2 h).
+
 # 1.3.0 — OpenAI, clear and recheck
 
 - Add OpenAI Responses API analysis with a configurable model, structured Persian title/caption/category and a date copied from the source. Keep the scheduled publication date tied to the system clock and selected timezone. Preserve optional local Ollama analysis.

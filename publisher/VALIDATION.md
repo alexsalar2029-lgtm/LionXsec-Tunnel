@@ -1,3 +1,7 @@
+# 1.3.3 validation
+
+92 unit/integration tests passed on Linux. Browser smoke passed, including disabling/enabling the content restriction checkbox through the real UI and verifying persisted settings. Media smoke passed with real FFmpeg. JavaScript syntax passed. Remote OpenAI and Telegram calls are simulated; Windows Server 2016 execution and live API delivery were not tested. Historical results follow.
+
 # Validation — LIONXSEC Publisher Studio 1.3.0
 
 ## 1.3.0 validation

@@ -2,12 +2,13 @@
 from datetime import datetime,timedelta
 from pathlib import Path
 import re
+import hashlib
 import threading
 import time
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo,ZoneInfoNotFoundError
 
-from content import KINDS,MAX_BYTES,ContentError,analyze,caption,detect_kind,fingerprint,prepare,protected_content,thumbnail,validate_caption_template
+from content import KINDS,ContentError,analyze,caption,detect_kind,fingerprint,prepare,protected_content,thumbnail,validate_caption_template
 from ai_client import check_openai,validate_key
 from mtproto_client import MTProto,TelegramError,account_label,normalize_api_hash,normalize_api_id,normalize_phone
 from storage import DEFAULTS,atomic_write
@@ -36,13 +37,13 @@ def validate_settings(data):
     times=value['times']
     if not isinstance(times,list) or not 1<=len(times)<=24 or any(not isinstance(t,str) or not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d',t) for t in times): raise ValueError('times_invalid')
     value['times']=sorted(set(times))
-    for key in ['ai','watermark','recursive','auto_watch']:
+    for key in ['ai','watermark','recursive','auto_watch','content_restrictions']:
         if type(value[key]) is not bool: raise ValueError('invalid_settings')
     if value['text_placement'] not in ('header','footer'): raise ValueError('invalid_settings')
     if value['caption_format'] not in ('standard','custom'): raise ValueError('invalid_settings')
     if not 1<=len(value['brand'])<=60 or '\n' in value['brand'] or '\r' in value['brand']: raise ValueError('brand_invalid')
-    if protected_content(value['brand']): raise ValueError('sensitive_content')
-    validate_caption_template(value['caption_template'])
+    if value['content_restrictions'] and protected_content(value['brand']): raise ValueError('sensitive_content')
+    validate_caption_template(value['caption_template'],value['content_restrictions'])
     value['enabled']=False
     return value
 
@@ -282,34 +283,27 @@ class Engine:
             paths=[Path(prior['path'])]
         else:
             source=folder.rglob('*') if config['recursive'] else folder.iterdir()
-            paths=sorted((p for p in source if p.is_file() and not p.is_symlink() and p.suffix.lower() in KINDS and not p.name.endswith('.caption.txt') and not p.resolve().is_relative_to(self.store.directory.resolve()) and not any(part in ('.venv','.git') for part in p.parts)),key=lambda p:p.name.lower())
+            paths=sorted((p for p in source if p.is_file() and not p.is_symlink() and not p.name.endswith('.caption.txt') and not p.resolve().is_relative_to(self.store.directory.resolve()) and not any(part in ('.venv','.git') for part in p.parts)),key=lambda p:p.name.lower())
         self.runtime['total']=len(paths);added=0;checked=0;processed=set()
         for index,path in enumerate(paths):
             identifier=only_id
             if self.stop_event.is_set(): break
             self.runtime.update(scanned=index,current=path.name)
-            kind=KINDS.get(path.suffix.lower())
-            if not kind: continue
+            kind=KINDS.get(path.suffix.lower(),'document')
             try:
                 size=path.stat().st_size
-                if not size or size>MAX_BYTES: continue
-                digest=fingerprint(path);now=self.clock();resolved=str(path.resolve())
+                if not size: continue
+                resolved=str(path.resolve());digest=hashlib.sha256((resolved+'\0'+fingerprint(path)).encode()).hexdigest();now=self.clock()
                 with self.lock,self.store.db() as db:
                     if self.revision!=scan_revision: break
                     db.execute('BEGIN IMMEDIATE')
-                    match=db.execute('SELECT * FROM jobs WHERE digest=?',(digest,)).fetchone()
                     prior=(db.execute('SELECT * FROM jobs WHERE id=?',(only_id,)).fetchone() if only_id is not None
                            else db.execute('SELECT * FROM jobs WHERE path=? ORDER BY id DESC LIMIT 1',(resolved,)).fetchone())
-                    if not prior and match and not Path(match['path']).exists(): prior=match
                     if prior and prior['status'] in ('sending','preparing','uncertain'): continue
                     if prior and prior['status']=='sent':
                         if only_id is not None or prior['digest']==digest: continue
                         prior=None  # A changed file is a new publication; keep the sent history.
                     if prior and prior['status']=='excluded' and only_id is None: continue
-                    if match and (not prior or match['id']!=prior['id']):
-                        if prior:
-                            db.execute("UPDATE jobs SET status='review',error='duplicate_content',scheduled=NULL WHERE id=?",(prior['id'],))
-                        continue
                     if prior:
                         if prior['id'] in processed: continue
                         if not (only_id is not None or recheck or prior['digest']!=digest or prior['path']!=resolved or prior['error']=='analysis_required'): continue
@@ -332,7 +326,6 @@ class Engine:
                     result=self.analyzer(path,kind,analysis_settings)
                 except ContentError as error:
                     result={'status':'review','title':path.stem[:100],'body':'','error':error.code,'analysis':''}
-                if fingerprint(path)!=digest: raise ContentError('file_changed')
                 with self.lock,self.store.db() as db:
                     if self.revision!=scan_revision:
                         result={'status':'review','title':'','body':'','error':'analysis_settings_changed','analysis':''}
@@ -378,7 +371,7 @@ class Engine:
 
     def edit(self,identifier,title,body):
         if not isinstance(title,str) or not title.strip() or len(title)>100 or not isinstance(body,str) or len(body)>500: raise ValueError('caption_invalid')
-        if protected_content(title+'\n'+body): raise ValueError('sensitive_content')
+        if self.store.settings().get('content_restrictions',True) and protected_content(title+'\n'+body): raise ValueError('sensitive_content')
         with self.lock,self.store.db() as db:
             row=db.execute('SELECT * FROM jobs WHERE id=?',(int(identifier),)).fetchone()
             if not row or row['status'] in ('sent','sending','preparing','blocked','uncertain') or row['error'] in ('analyzing','analysis_required'): raise ValueError('job_locked')
