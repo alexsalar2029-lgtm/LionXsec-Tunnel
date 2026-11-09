@@ -12,6 +12,7 @@ the engine can reuse its existing retry and review handling.
 import asyncio
 import concurrent.futures
 import re
+import socket
 import threading
 
 from telethon import TelegramClient
@@ -22,7 +23,7 @@ from telethon.errors import (ApiIdInvalidError,AuthKeyDuplicatedError,AuthKeyUnr
     SessionRevokedError,SlowModeWaitError,UserBannedInChannelError,UserDeactivatedBanError)
 from telethon.sessions import StringSession
 
-APP_VERSION='1.2.2'
+APP_VERSION='1.4.1'
 UPLOAD_TIMEOUT=900
 
 
@@ -35,8 +36,11 @@ class TelegramError(Exception):
 def translate_error(error):
     """Map Telethon/network exceptions onto stable error codes without leaking secrets."""
     if isinstance(error,TelegramError): return error
-    if isinstance(error,(asyncio.TimeoutError,TimeoutError,OSError,concurrent.futures.TimeoutError)):
-        return TelegramError('connection_failed')
+    if isinstance(error,(asyncio.TimeoutError,TimeoutError,concurrent.futures.TimeoutError)):
+        return TelegramError('connection_timeout')
+    if isinstance(error,socket.gaierror): return TelegramError('connection_dns')
+    if isinstance(error,ConnectionRefusedError): return TelegramError('connection_refused')
+    if isinstance(error,OSError): return TelegramError('connection_failed')
     if isinstance(error,(FloodWaitError,FloodPremiumWaitError,SlowModeWaitError,PhoneNumberFloodError)):
         return TelegramError('telegram_rate_limit',retry_after=max(1,int(getattr(error,'seconds',60))))
     if isinstance(error,PhoneCodeInvalidError): return TelegramError('login_code_invalid')
@@ -79,7 +83,7 @@ class MTProto:
         future=asyncio.run_coroutine_threadsafe(collection,self._loop)
         try: return future.result(timeout)
         except (concurrent.futures.TimeoutError,asyncio.TimeoutError):
-            future.cancel();raise TelegramError('connection_failed') from None
+            future.cancel();raise TelegramError('connection_timeout') from None
 
     def _run(self,collection,timeout=120):
         try: return self.run(collection,timeout)
@@ -87,11 +91,14 @@ class MTProto:
         except Exception as error: raise translate_error(error) from None
 
     # ----- login flow -----------------------------------------------------
+    async def _connect(self):
+        # Telethon.connect() returns None on success, including an existing connection.
+        await self._client.connect()
+        if not self._client.is_connected(): raise TelegramError('connection_failed')
+        return True
+
     def connect(self,timeout=45):
-        try: connected=self.run(self._client.connect(),timeout)
-        except TelegramError: raise
-        except Exception as error: raise translate_error(error) from None
-        if not connected: raise TelegramError('connection_failed')
+        return self._run(self._connect(),timeout)
 
     def code_request(self,phone):
         sent=self._run(self._client.send_code_request(phone),timeout=60)

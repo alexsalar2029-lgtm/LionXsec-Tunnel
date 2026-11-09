@@ -425,7 +425,7 @@ class Engine:
         except TelegramError as error:
             attempts=job['attempts']+1
             if error.uncertain: status='uncertain'
-            elif (error.retry_after or error.code=='connection_failed') and attempts<4: status='scheduled'
+            elif (error.retry_after or error.code in ('connection_failed','connection_timeout','connection_dns','connection_refused')) and attempts<4: status='scheduled'
             else: status='failed'
             if error.code in ('session_invalid','account_not_logged_in'): self.close_account()
             with self.store.db() as db:

@@ -1,3 +1,9 @@
+# 1.4.1 — Telegram login connection fix
+
+- Correct the Telethon connection contract: connect() returns None on success. Await it and inspect is_connected() instead of treating its return value as a boolean failure. This applies to first login and reused publishing connections.
+- Report network timeout, DNS and refused-connection errors separately without exposing raw exception details. Keep retry handling for these network errors.
+- Add regression coverage through the real MTProto wrapper for successful None-returning connections, reconnection, disconnected state, code requests and retry after failure. 102 automated tests passed; no live Telegram account was used.
+
 # 1.4.0 — Faster intake and TXT channel branding
 
 - Remove internal semantic content gates and migrate previously blocked jobs to fresh analysis. Retain actual I/O, configuration and delivery-error handling.
