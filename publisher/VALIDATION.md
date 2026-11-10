@@ -1,3 +1,7 @@
+# 1.5.2 validation
+
+129 unit/integration tests passed. Native Qt WebEngine smoke passed with simulated Telegram delivery. A generated cover was visually inspected for the new lion mark, website, readable signature and date without a clock/timezone. Live Telegram, OpenAI analysis and Windows Server 2016 remain untested. File classification is heuristic; malformed or unsupported formats may still need manual review.
+
 # 1.5.1 validation
 
 123 unit/integration tests passed, including six new credit-cleanup regressions. Browser smoke passed with simulated OpenAI and Telegram. Tests cover the reported Config By example in captions, TXT output and filenames, nested HTML entities, custom captions, email/source preservation, local descriptions and streaming boundaries.

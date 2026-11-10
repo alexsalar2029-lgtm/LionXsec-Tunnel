@@ -122,7 +122,7 @@ class PublisherTests(unittest.TestCase):
         self.assertTrue(self.engine.tick());self.assertFalse(self.engine.tick())
         delivery=self.publisher().deliveries[0]
         self.assertEqual(delivery['kind'],'document');self.assertIn('@example_channel',delivery['bytes'].decode('utf-8-sig'))
-        self.assertIn('Published: 2030-01-02',delivery['caption']);self.assertIn('09:00',delivery['caption']);self.assertIn('https://example.com',delivery['caption'])
+        self.assertIn('Published: 2030-01-02',delivery['caption']);self.assertNotIn('09:00',delivery['caption']);self.assertNotIn('Asia/Tehran',delivery['caption']);self.assertIn('https://example.com',delivery['caption'])
         self.assertEqual(self.store.job(1)['status'],'sent');self.assertEqual(len(self.publisher().deliveries),1)
 
     def test_restart_does_not_resend_unknown_delivery(self):

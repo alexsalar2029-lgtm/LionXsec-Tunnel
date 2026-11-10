@@ -29,7 +29,7 @@ class CreditCleanupTests(unittest.TestCase):
                     self.assertEqual(result.count('Published:'),1)
                     self.assertEqual(result.count('@my_channel'),1)
                     self.assertIn('Useful instructions',result)
-                    self.assertIn('Published by LionXSec',result)
+                    self.assertIn('LionXSec | Digital Resources',result)
 
     def test_txt_copy_and_filename(self):
         with tempfile.TemporaryDirectory() as d:

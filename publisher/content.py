@@ -70,8 +70,8 @@ def detect_kind(path):
     path=Path(path)
     expected=KINDS.get(path.suffix.lower(),'document')
     with path.open('rb') as source: header=source.read(16)
-    if header.startswith(b'%PDF-'): return 'document'
-    if header.startswith((b'\xff\xd8\xff',b'\x89PNG\r\n\x1a\n')) or (header[:4]==b'RIFF' and header[8:12]==b'WEBP'):
+    if header.startswith((b'%PDF-',b'PK\x03\x04',b'PK\x05\x06',b'7z\xbc\xaf\x27\x1c',b'Rar!',b'\x1f\x8b')): return 'document'
+    if header.startswith((b'\xff\xd8\xff',b'\x89PNG\r\n\x1a\n',b'GIF87a',b'GIF89a',b'BM')) or (header[:4]==b'RIFF' and header[8:12]==b'WEBP'):
         return 'photo'
     if header[4:8]==b'ftyp' or header.startswith(b'\x1aE\xdf\xa3'): return 'video'
     if expected=='text' and b'\0' in header and not header.startswith((b'\xff\xfe',b'\xfe\xff')):
@@ -96,7 +96,12 @@ def source_text(path,kind):
     if side.exists(): return side.read_text(encoding='utf-8-sig')[:12000]
     if kind=='document':
         with path.open('rb') as source: header=source.read(5)
-        if header!=b'%PDF-': return ''  # non-PDF documents have no text to analyze
+        if header!=b'%PDF-':
+            # Read structured text without modifying it or changing document delivery.
+            if path.suffix.lower() not in {'.json','.csv','.tsv','.ini','.conf','.cfg','.yaml','.yml','.xml','.log'}: return ''
+            with path.open('rb') as source: raw=source.read(12000)
+            if b'\0' in raw: return ''
+            return raw.decode('utf-8-sig',errors='replace')
         from pypdf import PdfReader
         try:
             reader=PdfReader(path)
@@ -207,8 +212,22 @@ def describe_resource(path,text=''):
             return 'A domain-name list. The attached file contains the individual domain entries.'
         if all(re.fullmatch(r'(?:\d{1,3}\.){3}\d{1,3}:\d{1,5}',line) for line in sample):
             return 'A network endpoint list containing IP addresses and port numbers.'
-        if '[SETTINGS]' in text or ('{' in text and ':' in text):
+        if '[SETTINGS]' in text or re.search(r'(?m)^\s*\[[\w .-]+\]\s*$',text):
             return 'A configuration resource containing structured settings. See the attached file for the full contents.'
+        try:
+            structured=json.loads(text)
+        except (ValueError,TypeError): structured=None
+        if isinstance(structured,dict):
+            return 'A JSON document containing '+str(len(structured))+' top-level fields. The attachment preserves the structured data.'
+        if isinstance(structured,list):
+            return 'A JSON dataset containing '+str(len(structured))+' top-level entries.'
+        import csv
+        for delimiter in (',','\t',';'):
+            rows=list(csv.reader([line[:4096] for line in sample[:20]],delimiter=delimiter))
+            if len(rows)>=2 and len(rows[0])>=2 and all(len(row)==len(rows[0]) for row in rows):
+                return 'A tabular text dataset with '+str(len(rows[0]))+' columns in the sampled rows. See the attachment for the complete records.'
+        if all(re.match(r'^(?:https?|socks[45])://[^\s]+$',line,re.I) for line in sample):
+            return 'A list of network URLs with explicit connection schemes. The attachment contains the individual entries.'
         prose=next((line for line in lines if line.isascii() and len(re.findall(r'[A-Za-z]{2,}',line))>=5), '')
         if prose: return prose[:350]
         return 'A '+label+' text resource. The content preview contains '+str(len(lines))+' non-empty lines.'
@@ -244,14 +263,14 @@ def caption(job,settings,when):
     if not job['title']: job['title']=clean_stem(job['filename']) or 'Resource'
     if not job['body'] or job['body']=='Explore the attached resource.': job['body']=describe_resource(job['filename'])
     local=datetime.fromtimestamp(when,ZoneInfo(settings['timezone']))
-    date=local.strftime('%Y-%m-%d • %H:%M')
+    date=local.strftime('%Y-%m-%d')
     footer=''
     content_type=job.get('content_type','').replace('_',' ').title()
     if content_type and job.get('content_type')!='other': footer+='\n\n🏷 '+content_type
     source_date=english_source_date(job.get('source_date',''))
     if source_date: footer+='\nSource date: '+source_date[:80]
-    footer+='\n\nPublished: '+date+' ('+settings['timezone']+')'
-    footer+='\nPublished by '+settings.get('brand','LionXSec')
+    footer+='\n\nPublished: '+date
+    footer+='\n'+settings.get('brand','LionXSec')+' | Digital Resources'
     if identity(settings): footer+='\n'+identity(settings)
     if settings['website']: footer+='\n'+settings['website']
     limit=1024

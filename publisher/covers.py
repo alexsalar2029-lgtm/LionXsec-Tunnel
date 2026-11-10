@@ -40,13 +40,6 @@ def fit_lines(draw,text,width,max_lines=3,start=80,minimum=24):
         lines[-1]=line+'...'
     return lines,f
 
-def lion(draw,x,y,scale=2,color='#E6C47C'):
-    # Same geometric lion identity as the bundled application mark.
-    paths=[[(32,7),(44,12),(53,25),(48,44),(32,57),(16,44),(11,31),(20,18),(32,7)],
-           [(22,19),(32,22),(42,19),(45,29),(40,42),(32,49),(24,42),(19,29),(22,19)],
-           [(22,28),(28,31)],[(42,28),(36,31)],[(27,36),(37,36),(32,41),(27,36)],[(32,41),(32,45)]]
-    for points in paths: draw.line([(x+a*scale,y+b*scale) for a,b in points],fill=color,width=max(2,int(scale*1.4)))
-
 def local_art(job,seed):
     rng=random.Random(seed);palette=[(65,193,197),(146,116,234),(238,153,79),(62,179,126),(89,151,245)]
     accent=palette[seed%len(palette)];image=Image.new('RGB',(W,H),(9,17,30));draw=ImageDraw.Draw(image)
@@ -104,7 +97,10 @@ def make_cover(job,settings,directory,when):
     for x in range(W): draw.line((x,0,x,H),fill=(6,12,24,max(30,int(220*(1-x/W)))))
     draw.rectangle((0,0,W,150),fill=(6,12,24,235));draw.rectangle((0,H-160,W,H),fill=(6,12,24,240))
     image=Image.alpha_composite(image,overlay);draw=ImageDraw.Draw(image)
-    lion(draw,52,16,2)
+    with Image.open(Path(__file__).parent/'ui/assets/lion-emblem.png') as emblem:
+        emblem=ImageOps.contain(emblem.convert('RGBA'),(128,128),Image.Resampling.LANCZOS)
+        image.alpha_composite(emblem,(52+(128-emblem.width)//2,10+(128-emblem.height)//2))
+    draw=ImageDraw.Draw(image)
     brand=settings.get('brand','LionXSec')
     lines,f=fit_lines(draw,brand,950,1,58)
     draw.text((195,44),lines[0],font=f,fill='#F5F2E9')
@@ -119,9 +115,13 @@ def make_cover(job,settings,directory,when):
     for line in lines: draw.text((68,y),line,font=f,fill='#FFFFFF');y+=f.size+16
     draw.line((72,760,330,760),fill='#E6C47C',width=4)
     local=datetime.fromtimestamp(when,ZoneInfo(settings['timezone']))
-    signature='By '+brand+'  |  '+identity(settings)
+    signature=brand+'  /  '+identity(settings)
     lines,f=fit_lines(draw,signature,1260,1,28)
     draw.text((72,830),lines[0],font=f,fill='#F5F2E9')
-    draw.text((72,885),local.strftime('%B %d, %Y')+'  •  '+local.strftime('%H:%M')+' '+settings['timezone'],font=font(23),fill='#AAB8CD')
+    draw.text((72,885),local.strftime('%B %d, %Y'),font=font(23),fill='#AAB8CD')
+    website=settings.get('website','')
+    if website:
+        lines,site_font=fit_lines(draw,website,760,1,24)
+        draw.text((W-72,885),lines[0],font=site_font,fill='#E6C47C',anchor='ra')
     result=directory/f"{job['id']}-cover.jpg";buf=io.BytesIO();image.convert('RGB').save(buf,'JPEG',quality=93)
     atomic_write(result,buf.getvalue());return result,source

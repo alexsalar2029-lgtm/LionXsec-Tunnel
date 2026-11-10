@@ -180,7 +180,7 @@ class RescanTests(unittest.TestCase):
         self.assertEqual(job['analysis'],'openai')
         when=datetime(2030,1,2,9,0,tzinfo=ZoneInfo('Asia/Tehran')).timestamp()
         text=caption(job,self.store.settings(),when)
-        self.assertIn('Educational',text);self.assertIn('Source date: 2026-',text);self.assertIn('09:00',text)
+        self.assertIn('Educational',text);self.assertIn('Source date: 2026-',text);self.assertNotIn('09:00',text);self.assertNotIn('Asia/Tehran',text)
         self.assertEqual(request.call_args.kwargs['headers']['Authorization'],'Bearer '+KEY)
         self.assertFalse(request.call_args.kwargs['allow_redirects'])
 

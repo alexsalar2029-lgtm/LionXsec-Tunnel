@@ -11,7 +11,7 @@ import sqlite3
 import tempfile
 import time
 
-DEFAULTS = {'folder':'','channel':'','tag':'','website':'','times':['09:00','10:20','11:40','13:00','14:20','15:40','17:00','18:20','19:40','21:00'],
+DEFAULTS = {'folder':'','channel':'','tag':'','website':'https://lionxsec.sbs/','times':['09:00','10:20','11:40','13:00','14:20','15:40','17:00','18:20','19:40','21:00'],
             'timezone':'Asia/Tehran','ai':True,'model':'qwen3-vl:4b','watermark':False,
             'recursive':False,'auto_watch':True,'text_placement':'footer','enabled':False,
             'caption_format':'standard','caption_template':'📄 {title}\n\n{body}\n\n{year} BY {brand} 🦁','brand':'LionXSec','cover_mode':'openai','image_model':'gpt-image-1',
@@ -95,6 +95,9 @@ class Store:
                 db.execute("INSERT INTO settings VALUES('english_ten_v1','true')")
                 if {'status','scheduled','error'} <= {r['name'] for r in db.execute('PRAGMA table_info(jobs)')}:
                     db.execute("UPDATE jobs SET status='review',scheduled=NULL,error='analysis_required' WHERE status NOT IN ('sent','sending','preparing','uncertain','excluded')")
+            if not db.execute("SELECT 1 FROM settings WHERE key='lionxsec_site_v1'").fetchone():
+                db.execute('INSERT OR REPLACE INTO settings VALUES(?,?)',('website',json.dumps('https://lionxsec.sbs/')))
+                db.execute("INSERT INTO settings VALUES('lionxsec_site_v1','true')")
             columns={row['name'] for row in db.execute('PRAGMA table_info(jobs)')}
             if 'path' in columns: db.execute('CREATE INDEX IF NOT EXISTS jobs_path_idx ON jobs(path)')
             for name in ('content_type','source_date'):

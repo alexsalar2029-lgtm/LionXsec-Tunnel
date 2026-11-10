@@ -1,3 +1,10 @@
+# 1.5.2 — Lion identity, website and format evidence
+
+- Replace the line-drawn lion with a generated gold lion emblem bundled locally. Add the website to cover footers and migrate the requested site once.
+- Remove time and timezone from captions/covers while retaining Gregorian dates and existing scheduling. Refine the channel signature.
+- Recognize archive, GIF and BMP signatures independently of filename extensions. Read bounded structured-text documents for analysis without rewriting them. Distinguish JSON, tabular data and INI settings from ordinary prose.
+- Add six regression tests for signatures, detection, descriptions and website migration.
+
 # 1.5.1 — Clean credits and descriptive captions
 
 - Decode nested HTML entities and remove complete Telegram promotional credit labels, including Config By and filename separators, before analysis and output. Remove copied publisher timestamps; preserve email addresses and original source bytes.
