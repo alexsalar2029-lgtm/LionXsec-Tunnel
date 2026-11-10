@@ -1,3 +1,9 @@
+# 1.5.1 validation
+
+123 unit/integration tests passed, including six new credit-cleanup regressions. Browser smoke passed with simulated OpenAI and Telegram. Tests cover the reported Config By example in captions, TXT output and filenames, nested HTML entities, custom captions, email/source preservation, local descriptions and streaming boundaries.
+
+No live Telegram/OpenAI or Windows Server 2016 execution was performed. Text cleanup applies to TXT/MD copies; binary document contents are preserved. Previously sent posts are not edited. Historical validation follows.
+
 # 1.5.0 validation
 
 117 unit/integration tests passed on Linux. New coverage checks ten slots, next-day rollover, already-sent daily counts, legacy migration, fitted long titles, distinct topic covers, API request shape, cached artwork, local image fallback and linked photo/file delivery with partial-failure uncertainty. Browser smoke passed with cover preview, English/Gregorian caption, ten-slot controls and responsive widths. Native Qt WebEngine/JavaScript bridge and real FFmpeg smoke passed. Local 1440x960 covers were visually inspected for typography, lion mark, signature, subject illustration and date.

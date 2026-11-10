@@ -1,3 +1,10 @@
+# 1.5.1 — Clean credits and descriptive captions
+
+- Decode nested HTML entities and remove complete Telegram promotional credit labels, including Config By and filename separators, before analysis and output. Remove copied publisher timestamps; preserve email addresses and original source bytes.
+- Sanitize captions for every media kind, custom templates, cover inputs and generated document names. TXT/MD copies receive the destination identity once; binary file contents remain unchanged.
+- Request concrete English attachment descriptions from AI and provide content-based local descriptions for text resources. Use the selected public destination as the authoritative signature.
+- Add six regression tests for the reported example, encoded credits, all caption kinds, custom templates, filenames, binary preservation and large streaming boundaries.
+
 # 1.5.0 — English branded covers and ten daily posts
 
 - Generate English subject-specific captions; use Gregorian publication dates and English signatures. Convert recognizable numeric Jalali source dates for display. Local fallback uses English filenames rather than presenting untranslated Persian captions.

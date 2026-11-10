@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from PIL import Image,ImageDraw,ImageFont,ImageOps
 from ai_client import AIError,generate_background
 from storage import atomic_write
+from text_branding import clean_references,clean_stem,identity
 
 FONT=Path(__file__).parent/'ui/assets/sora.ttf'
 W,H=1440,960
@@ -70,6 +71,9 @@ def local_art(job,seed):
     return image
 
 def make_cover(job,settings,directory,when):
+    job=dict(job)
+    job['title']=clean_references(job.get('title','')).strip() or clean_stem(job.get('filename','')) or 'Resource'
+    job['body']=clean_references(job.get('body','')).strip()
     directory=Path(directory);directory.mkdir(parents=True,exist_ok=True)
     signature=json.dumps([job.get('digest',''),job.get('title',''),job.get('body',''),settings['cover_mode'],settings['image_model']],ensure_ascii=False)
     key=hashlib.sha256(signature.encode()).hexdigest();seed=int(key[:12],16)
@@ -115,7 +119,7 @@ def make_cover(job,settings,directory,when):
     for line in lines: draw.text((68,y),line,font=f,fill='#FFFFFF');y+=f.size+16
     draw.line((72,760,330,760),fill='#E6C47C',width=4)
     local=datetime.fromtimestamp(when,ZoneInfo(settings['timezone']))
-    signature='By '+brand+'  |  '+(settings.get('tag') or settings.get('channel') or '')
+    signature='By '+brand+'  |  '+identity(settings)
     lines,f=fit_lines(draw,signature,1260,1,28)
     draw.text((72,830),lines[0],font=f,fill='#F5F2E9')
     draw.text((72,885),local.strftime('%B %d, %Y')+'  •  '+local.strftime('%H:%M')+' '+settings['timezone'],font=font(23),fill='#AAB8CD')

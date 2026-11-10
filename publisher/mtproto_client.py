@@ -23,7 +23,7 @@ from telethon.errors import (ApiIdInvalidError,AuthKeyDuplicatedError,AuthKeyUnr
     SessionRevokedError,SlowModeWaitError,UserBannedInChannelError,UserDeactivatedBanError)
 from telethon.sessions import StringSession
 
-APP_VERSION='1.5.0'
+APP_VERSION='1.5.1'
 UPLOAD_TIMEOUT=900
 
 
