@@ -89,6 +89,20 @@ $('#clear-confirm').addEventListener('click',()=>action($('#clear-confirm'),asyn
 $('#toggle-run').addEventListener('click',()=>action($('#toggle-run'),async()=>{if(state.settings.enabled){await call('pause');notice('انتشارهای بعدی متوقف شدند.');}else{await call('enable');notice('زمان‌بندی فعال شد. برنامه و کامپیوتر روشن بمانند.');}}));
 $('#open-outputs').addEventListener('click',()=>action($('#open-outputs'),()=>call('open_outputs')));
 $('#settings-form').addEventListener('submit',e=>{e.preventDefault();action($('#settings-form button[type=submit]'),async()=>{await saveSettings();notice('تنظیمات ذخیره شد؛ انتشار را از بالای برنامه فعال کن.');});});
+let availableChannels=[];
+$('#load-channels').addEventListener('click',()=>action($('#load-channels'),async()=>{
+ const picker=$('#channel-picker');availableChannels=[];picker.replaceChildren(new Option('در حال دریافت…',''));$('#channels-result').textContent='در حال دریافت کانال‌های حساب تلگرام…';
+ try{availableChannels=await call('list_channels');picker.replaceChildren(new Option('کانال مقصد را انتخاب کنید',''));
+ for(const channel of availableChannels)picker.add(new Option(channel.title+' · '+(channel.username?'@'+channel.username:'خصوصی')+' · '+channel.id,channel.id));
+ $('#channels-result').textContent=availableChannels.length?'کانال دلخواه را انتخاب و سپس ذخیره و بررسی اتصال را بزنید.':'کانالی با اجازهٔ ارسال برای این حساب پیدا نشد. حساب واردشده و دسترسی ارسال پیام را بررسی کنید.';
+ }catch(e){picker.replaceChildren(new Option('دریافت کانال‌ها انجام نشد',''));$('#channels-result').textContent=errorMessage(e.message);throw e;}
+}));
+$('#channel-picker').addEventListener('change',()=>action($('#channel-picker'),async()=>{
+ const channel=availableChannels.find(c=>c.id===$('#channel-picker').value);if(!channel)return;
+ await call('pause');const form=$('#settings-form');form.elements.channel.value=channel.id;form.elements.tag.value=channel.username?'@'+channel.username:'';
+ $('#verify-result').textContent='مقصد انتخاب شد: '+channel.title+'؛ ذخیره و بررسی اتصال را بزنید.';
+ notice('انتشار متوقف شد؛ مقصد جدید را ذخیره و بررسی کنید.');
+}));
 $('#verify').addEventListener('click',()=>action($('#verify'),async()=>{$('#verify-result').textContent='در حال بررسی…';try{await saveSettings();const v=await call('verify');$('#verify-result').textContent='اتصال برقرار است: '+v.channel_title+' · '+v.account;}catch(e){$('#verify-result').textContent=errorMessage(e.message);throw e;}}));
 $('#test-ai').addEventListener('click',()=>action($('#test-ai'),async()=>{$('#ai-result').textContent='در حال بررسی…';try{await saveSettings();const result=await call('test_ai');$('#ai-result').textContent=(result.provider==='openai'?'OpenAI':'Ollama')+' و مدل '+result.model+' در دسترس‌اند.';}catch(e){$('#ai-result').textContent=errorMessage(e.message);throw e;}}));
 $('#settings-form').elements.ai_provider.addEventListener('change',updateAIInputs);

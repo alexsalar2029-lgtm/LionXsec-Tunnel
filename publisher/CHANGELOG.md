@@ -1,3 +1,11 @@
+# 1.4.2 — Private channel selection and administrator permissions
+
+- Fix permission checks to read Telethon ParticipantPermissions.post_messages instead of a nonexistent admin_rights field; preserve creator access and require actual post permission for channel administrators.
+- Preserve network/session errors from permission queries instead of masking every failure as an authorization denial.
+- List owned and writable public/private broadcast channels from paginated dialogs, using marked numeric IDs. Add a UI channel picker and verification flow; selection pauses publishing and updates the destination and branding fields.
+- Resolve numeric destinations as integer peer IDs and remove the previous 500-dialog fallback limit.
+- Add six regression tests with real Telethon permission objects and browser coverage for fetching, selecting and saving a private channel.
+
 # 1.4.1 — Telegram login connection fix
 
 - Correct the Telethon connection contract: connect() returns None on success. Await it and inspect is_connected() instead of treating its return value as a boolean failure. This applies to first login and reused publishing connections.

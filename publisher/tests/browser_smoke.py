@@ -24,6 +24,7 @@ class QuietHandler(SimpleHTTPRequestHandler):
     def log_message(self,*args): pass
 class TestAccount:
     def connect(self,timeout=45): return True
+    def list_channels(self): return [{'id':'-1001234567890','title':'کانال خصوصی من','username':''},{'id':'-1002345678901','title':'کانال عمومی من','username':'example_channel'}]
     def verify(self,channel): return {'account':'@example_account','channel_title':'کارگاه طراحی','channel_id':'-10011111111'}
     def send(self,*args): raise AssertionError('This UI test does not send Telegram messages')
     def disconnect(self): pass
@@ -43,7 +44,7 @@ with tempfile.TemporaryDirectory() as temp:
             browser=p.chromium.launch(headless=True,executable_path=os.environ.get('CHROMIUM_EXECUTABLE') or shutil.which('chromium'),args=['--no-sandbox'])
             page=browser.new_page(viewport={'width':1440,'height':1080},device_scale_factor=1)
             errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
-            allowed=['snapshot','detail','preview_caption','thumbnail','edit','save_settings','scan','enable','pause','verify','prepare_copy','remove','reanalyze','acknowledge','login_start','login_code','login_password','login_cancel','disconnect_account','clear_analysis','save_openai_key','clear_openai_key','test_ai']
+            allowed=['list_channels','snapshot','detail','preview_caption','thumbnail','edit','save_settings','scan','enable','pause','verify','prepare_copy','remove','reanalyze','acknowledge','login_start','login_code','login_password','login_cancel','disconnect_account','clear_analysis','save_openai_key','clear_openai_key','test_ai']
             page.expose_function('qaCall',lambda name,args:getattr(api,name)(*args) if name in allowed else None)
             page.add_init_script('window.pywebview={api:Object.fromEntries('+json.dumps(allowed)+'.map(n=>[n,(...a)=>window.qaCall(n,a)]))};')
             page.goto('http://127.0.0.1:'+str(server.server_port),wait_until='networkidle')
@@ -68,6 +69,18 @@ with tempfile.TemporaryDirectory() as temp:
             page.locator('[data-page=settings]').click()
             expect(page.locator('#account-connected')).to_be_visible()
             expect(page.locator('#account-name')).to_have_text('کاربر نمونه')
+            page.locator('#load-channels').click()
+            expect(page.locator('#channel-picker option')).to_have_count(3)
+            page.locator('#channel-picker').select_option('-1001234567890')
+            expect(page.locator('[name=channel]')).to_have_value('-1001234567890')
+            expect(page.locator('[name=tag]')).to_have_value('')
+            page.locator('#verify').click()
+            expect(page.locator('#verify-result')).to_contain_text('اتصال برقرار است')
+            assert store.settings()['channel']=='-1001234567890'
+            page.screenshot(path=str(ARTIFACTS/'private-channel-picker.png'),full_page=True)
+            page.locator('#channel-picker').select_option('-1002345678901')
+            expect(page.locator('[name=tag]')).to_have_value('@example_channel')
+
             expect(page.locator('#login-wizard')).to_be_hidden()
             page.locator('[name=caption_format]').select_option('custom')
             page.locator('[name=caption_template]').fill('📄 {title}\n\n{body}\n\n{year} BY {brand}')

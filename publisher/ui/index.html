@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b0c0f"><title>LIONXSEC Publisher</title><link rel="stylesheet" href="style.css?v=1.4.1"><script defer src="app.js?v=1.4.1"></script></head>
+<html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b0c0f"><title>LIONXSEC Publisher</title><link rel="stylesheet" href="style.css?v=1.4.2"><script defer src="app.js?v=1.4.2"></script></head>
 <body>
 <div id="boot" class="boot"><div class="boot-symbol">L<span>✦</span></div><b>LIONXSEC PUBLISHER</b><p id="boot-message">در حال باز کردن فضای کاری…</p><small>با فایل START-LIONXSEC.cmd اجرا کنید.</small></div>
 <aside class="sidebar">
@@ -52,6 +52,8 @@
     </div>
    </div>
    <div class="settings-card"><div class="settings-title"><span class="stat-icon blue"><i data-icon="link"></i></span><div><h2>کانال مقصد</h2><p>حساب تو باید سازنده یا مدیر کانال باشد.</p></div></div>
+    <button type="button" class="button subtle full" id="load-channels">دریافت کانال‌های من</button>
+    <label>انتخاب کانال برای انتشار<select id="channel-picker"><option value="">ابتدا کانال‌ها را دریافت کنید</option></select></label><p id="channels-result" class="field-help">کانال‌های عمومی و خصوصی که در آن‌ها اجازهٔ ارسال دارید نمایش داده می‌شوند. پس از انتخاب، ذخیره و بررسی اتصال را بزنید.</p>
     <label>شناسهٔ کانال مقصد<input name="channel" dir="ltr" placeholder="@your_channel یا -1001234567890" maxlength="64"></label><p class="field-help">برای کانال عمومی <span dir="ltr">@username</span> و برای کانال خصوصی شناسهٔ عددی ‎-100… لازم است؛ لینک دعوت، شناسهٔ مقصد نیست. حساب واردشده باید اجازهٔ ارسال پست در این کانال را داشته باشد.</p>
     <button type="button" class="button subtle full" id="verify"><i data-icon="link"></i>ذخیره و بررسی اتصال</button><p id="verify-result" class="test-result"></p>
    </div>

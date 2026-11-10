@@ -23,7 +23,7 @@ from telethon.errors import (ApiIdInvalidError,AuthKeyDuplicatedError,AuthKeyUnr
     SessionRevokedError,SlowModeWaitError,UserBannedInChannelError,UserDeactivatedBanError)
 from telethon.sessions import StringSession
 
-APP_VERSION='1.4.1'
+APP_VERSION='1.4.2'
 UPLOAD_TIMEOUT=900
 
 
@@ -131,11 +131,10 @@ class MTProto:
             raise TelegramError('not_channel')
         if not getattr(entity,'creator',False):
             try: participant=await self._client.get_permissions(entity,await self._client.get_me())
-            except Exception: raise TelegramError('account_permission') from None
+            except Exception as error: raise translate_error(error) from None
             if getattr(entity,'broadcast',False):
-                rights=getattr(participant,'admin_rights',None)
                 if not (getattr(participant,'is_creator',False) or
-                        (rights and getattr(rights,'post_messages',False))):
+                        getattr(participant,'post_messages',False)):
                     raise TelegramError('account_permission')
             elif getattr(participant,'is_banned',False) or getattr(participant,'has_left',False):
                 raise TelegramError('account_permission')
@@ -143,18 +142,36 @@ class MTProto:
                 'channel_title':getattr(entity,'title','') or '',
                 'channel_id':str(getattr(entity,'id',''))}
 
+    def list_channels(self):
+        return self._run(self._list_channels(),timeout=180)
+
+    async def _list_channels(self):
+        channels=[];seen=set()
+        # GetDialogs supplies this account's creator/admin rights, including private channels.
+        async for dialog in self._client.iter_dialogs(limit=None):
+            entity=dialog.entity
+            if not getattr(entity,'broadcast',False): continue
+            rights=getattr(entity,'admin_rights',None)
+            if not (getattr(entity,'creator',False) or (rights and getattr(rights,'post_messages',False))): continue
+            identifier=str(dialog.id)
+            if identifier in seen: continue
+            seen.add(identifier)
+            channels.append({'id':identifier,'title':getattr(entity,'title','') or identifier,
+                             'username':getattr(entity,'username','') or ''})
+        return sorted(channels,key=lambda item:item['title'].casefold())
+
     async def _resolve(self,channel):
         """Resolve @username or marked -100 id, populating the session cache from dialogs."""
         text=str(channel).strip()
-        try: return await self._client.get_entity(text)
+        numeric=int(text) if re.fullmatch(r'-?\d+',text) else None
+        try: return await self._client.get_entity(numeric if numeric is not None else text)
         except TelegramError: raise
         except ValueError: pass  # bare identifier without access hash
         except Exception as error: raise translate_error(error) from None
-        numeric=int(text) if re.fullmatch(r'-?\d+',text) else None
         handle=text.lstrip('@').lower()
         target=None
         try:
-            async for dialog in self._client.iter_dialogs(limit=500):
+            async for dialog in self._client.iter_dialogs(limit=None):
                 if numeric is not None and dialog.id==numeric: target=dialog.entity;break
                 username=getattr(getattr(dialog,'entity',None),'username',None)
                 if handle and username and username.lower()==handle: target=dialog.entity;break

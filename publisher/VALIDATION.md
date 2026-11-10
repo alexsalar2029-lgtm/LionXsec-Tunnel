@@ -1,3 +1,7 @@
+# 1.4.2 validation
+
+108 unit/integration tests passed. New tests use real Telethon ParticipantPermissions, ChannelParticipantAdmin and ChannelParticipantCreator objects to verify posting rights, rejection without posting rights, numeric peer resolution and accurate network error propagation. Channel listing tests cover public/private channels, deduplication, read-only/group exclusion and empty results. Browser smoke passed against the real UI/API with simulated Telegram dialogs: fetch, private-channel selection, saving/verifying the marked ID, public-channel branding and responsive layouts. JavaScript syntax passed. No live Telegram account or Windows execution was used. Historical results follow.
+
 # 1.4.1 validation
 
 102 unit/integration tests passed on Linux; JavaScript syntax passed. New tests exercise the real MTProto wrapper against an async client matching Telethon's None-returning connect() contract, verify code-request progression, reconnect, disconnected-state rejection and retry after network failure. Network error mappings are secret-free. The installed Telethon 1.45.0 source confirms connect() returns None and exposes is_connected(). Live Telegram connectivity, code delivery and Windows Server 2016 execution remain untested. Historical results follow.

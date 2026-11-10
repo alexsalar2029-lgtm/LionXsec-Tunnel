@@ -82,6 +82,7 @@ class API:
         return {'settings':settings,'jobs':jobs,'counts':counts,'events':events,'runtime':dict(self._engine.runtime),'now':time.time()}
 
     def save_settings(self,data): return self._call(self._engine.save_settings,data)
+    def list_channels(self): return self._call(self._engine.list_channels)
     def verify(self): return self._call(self._engine.verify)
     def login_start(self,api_id,api_hash,phone): return self._call(self._engine.login_start,api_id,api_hash,phone)
     def login_code(self,code): return self._call(self._engine.login_code,code)

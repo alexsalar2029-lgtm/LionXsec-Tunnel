@@ -187,6 +187,13 @@ class Engine:
         self.store.event('تنظیمات ذخیره شد. برای انتشار، زمان‌بندی را فعال کنید.')
         return settings
 
+    def list_channels(self):
+        client=self.account_client();client.connect()
+        try: return client.list_channels()
+        except TelegramError as error:
+            if error.code=='session_invalid': self.close_account()
+            raise
+
     def verify(self):
         config=self.store.settings()
         if not config['channel']: raise ValueError('channel_missing')

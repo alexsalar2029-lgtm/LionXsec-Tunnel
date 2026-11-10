@@ -443,7 +443,7 @@ class MTProtoTests(unittest.TestCase):
     def test_verify_resolves_marked_id_from_dialogs_and_requires_post_right(self):
         entity=self.entity(username='')
         dialog=SimpleNamespace(id=-100333444555000,entity=entity)
-        admin=SimpleNamespace(admin_rights=SimpleNamespace(post_messages=True),is_creator=False,is_banned=False,has_left=False)
+        admin=SimpleNamespace(post_messages=True,is_creator=False,is_banned=False,has_left=False)
         info=self.mtproto(self.client(entity,dialogs=[dialog],permissions=admin)).verify('-100333444555000')
         self.assertEqual(info['channel_title'],'My Channel')
         denied=SimpleNamespace(admin_rights=None,is_creator=False,is_banned=False,has_left=False)
@@ -463,7 +463,7 @@ class MTProtoTests(unittest.TestCase):
 
     def test_send_maps_kinds_to_telethon_calls(self):
         entity=self.entity()
-        fake=self.client(entity,permissions=SimpleNamespace(admin_rights=SimpleNamespace(post_messages=True),is_creator=False))
+        fake=self.client(entity,permissions=SimpleNamespace(post_messages=True,is_creator=False))
         proto=self.mtproto(fake)
         with tempfile.TemporaryDirectory() as temp:
             path=Path(temp)/'lesson.txt';path.write_text('body')
