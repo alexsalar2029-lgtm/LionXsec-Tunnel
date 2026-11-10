@@ -73,7 +73,7 @@ with tempfile.TemporaryDirectory() as temp:
             assert engine.tick();window.evaluate_js('refresh()')
             wait('state.counts.sent===1')
             assert len(account.sent)==1
-            assert '📅' in account.sent[0][1] and 'https://example.com' in account.sent[0][1]
+            assert 'Published:' in account.sent[0][1] and 'https://example.com' in account.sent[0][1]
             window.evaluate_js("document.getElementById('toggle-run').click()")
             wait('!state.settings.enabled')
             window.evaluate_js("document.querySelector('[data-page=\"settings\"]').click()")
@@ -83,7 +83,7 @@ with tempfile.TemporaryDirectory() as temp:
             assert not store.settings()['enabled']
             window.evaluate_js("document.getElementById('settings-form').elements.caption_format.value='custom';document.getElementById('settings-form').elements.caption_template.value='📄 {title}\\n{body}\\n{year} BY {brand}';document.querySelector('#settings-form button[type=submit]').click()")
             wait("state.settings.caption_format==='custom'")
-            assert 'BY LionXsec' in api.detail(text_job['id'])['caption']
+            assert 'BY LionXSec' in api.detail(text_job['id'])['caption']
             assert (folder/'lesson.txt').read_text(encoding='utf-8').startswith('درس عکاسی')
             window.evaluate_js("document.querySelector('[data-page=\"library\"]').click();document.getElementById('clear-analysis').click()")
             wait("document.getElementById('clear-dialog').open")

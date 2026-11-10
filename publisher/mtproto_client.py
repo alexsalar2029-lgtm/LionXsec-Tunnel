@@ -23,7 +23,7 @@ from telethon.errors import (ApiIdInvalidError,AuthKeyDuplicatedError,AuthKeyUnr
     SessionRevokedError,SlowModeWaitError,UserBannedInChannelError,UserDeactivatedBanError)
 from telethon.sessions import StringSession
 
-APP_VERSION='1.4.2'
+APP_VERSION='1.5.0'
 UPLOAD_TIMEOUT=900
 
 
@@ -181,11 +181,21 @@ class MTProto:
         return target
 
     def send(self,job,caption,path,kind):
-        message=self._run(self._deliver(job['channel'],caption,str(path),kind),timeout=UPLOAD_TIMEOUT)
+        try: message=self._run(self._deliver(job['channel'],caption,str(path),kind,job.get('cover_path')),timeout=UPLOAD_TIMEOUT)
+        except TelegramError as error:
+            if job.get('cover_path') and error.code in ('connection_timeout','connection_failed','telegram_request'):
+                raise TelegramError('delivery_unknown',uncertain=True) from None
+            raise
         return {'message_id':int(message.id)}
 
-    async def _deliver(self,channel,caption,path,kind):
+    async def _deliver(self,channel,caption,path,kind,cover=None):
         entity=await self._resolve(channel)
+        if cover:
+            photo=await self._client.send_file(entity,cover,caption=caption,force_document=False)
+            try:
+                return await self._client.send_file(entity,path,caption='Attached resource',force_document=kind=='document',reply_to=photo.id,**({'supports_streaming':True} if kind=='video' else {}))
+            except Exception:
+                raise TelegramError('delivery_unknown',uncertain=True) from None
         if kind=='text':
             return await self._client.send_message(entity,caption,link_preview=False)
         options={'caption':caption,'force_document':kind=='document'}

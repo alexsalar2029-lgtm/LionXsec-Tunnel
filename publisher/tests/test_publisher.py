@@ -112,17 +112,17 @@ class PublisherTests(unittest.TestCase):
         first=next_slot(self.config,self.now)
         self.assertEqual(datetime.fromtimestamp(first,ZoneInfo('Asia/Tehran')).strftime('%H:%M'),'09:00')
         second=next_slot(self.config,self.now,[first])
-        self.assertEqual(datetime.fromtimestamp(second,ZoneInfo('Asia/Tehran')).strftime('%H:%M'),'14:00')
+        self.assertEqual(datetime.fromtimestamp(second,ZoneInfo('Asia/Tehran')).strftime('%H:%M'),'10:20')
         end=datetime(2030,1,2,22,tzinfo=ZoneInfo('Asia/Tehran')).timestamp()
         self.assertEqual(datetime.fromtimestamp(next_slot(self.config,end),ZoneInfo('Asia/Tehran')).day,3)
 
-    def test_one_send_at_due_time_with_edited_document_and_persian_date(self):
+    def test_one_send_at_due_time_with_edited_document_and_gregorian_date(self):
         self.source();self.scan();self.engine.enable()
         self.assertFalse(self.engine.tick());self.now=self.store.job(1)['scheduled']
         self.assertTrue(self.engine.tick());self.assertFalse(self.engine.tick())
         delivery=self.publisher().deliveries[0]
         self.assertEqual(delivery['kind'],'document');self.assertIn('@example_channel',delivery['bytes'].decode('utf-8-sig'))
-        self.assertIn('📅',delivery['caption']);self.assertIn('09:00',delivery['caption']);self.assertIn('https://example.com',delivery['caption'])
+        self.assertIn('Published: 2030-01-02',delivery['caption']);self.assertIn('09:00',delivery['caption']);self.assertIn('https://example.com',delivery['caption'])
         self.assertEqual(self.store.job(1)['status'],'sent');self.assertEqual(len(self.publisher().deliveries),1)
 
     def test_restart_does_not_resend_unknown_delivery(self):
@@ -148,7 +148,7 @@ class PublisherTests(unittest.TestCase):
         self.source();self.scan();self.due();self.publisher().failure=TelegramError('telegram_rate_limit',retry_after=90)
         self.engine.tick();job=self.store.job(1)
         self.assertEqual(job['status'],'scheduled');self.assertGreater(job['scheduled'],self.now+90)
-        self.assertEqual(datetime.fromtimestamp(job['scheduled'],ZoneInfo('Asia/Tehran')).strftime('%H:%M'),'14:00')
+        self.assertEqual(datetime.fromtimestamp(job['scheduled'],ZoneInfo('Asia/Tehran')).strftime('%H:%M'),'10:20')
 
     def test_current_source_and_new_files_are_accepted(self):
         path=self.source();self.scan();self.due();path.write_text('Changed data',encoding='utf-8')
@@ -231,7 +231,7 @@ class PublisherTests(unittest.TestCase):
                 'caption_template':'📄 {title}\n\n{body}\n\n{filename}\n{year} BY {brand}'}
         output=caption({**job,'title':'A lesson {brand}','body':'Original description'},config,self.now)
         self.assertTrue(output.startswith('📄 A lesson {brand}\n\nOriginal description\n\nlesson.txt\n2030 BY Example Studio'))
-        self.assertEqual(output.count('📅'),1)
+        self.assertEqual(output.count('Published:'),1)
         self.assertTrue(output.endswith('https://example.com'))
 
     def test_custom_caption_keeps_footer_inside_telegram_limit(self):

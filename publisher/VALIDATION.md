@@ -1,3 +1,9 @@
+# 1.5.0 validation
+
+117 unit/integration tests passed on Linux. New coverage checks ten slots, next-day rollover, already-sent daily counts, legacy migration, fitted long titles, distinct topic covers, API request shape, cached artwork, local image fallback and linked photo/file delivery with partial-failure uncertainty. Browser smoke passed with cover preview, English/Gregorian caption, ten-slot controls and responsive widths. Native Qt WebEngine/JavaScript bridge and real FFmpeg smoke passed. Local 1440x960 covers were visually inspected for typography, lion mark, signature, subject illustration and date.
+
+OpenAI text/image responses and Telegram delivery are simulated in tests. No live API billing, model output quality, Telegram photo/reply delivery or Windows Server 2016 execution was verified here. The OpenAI image endpoint uses the stored key and may require account/model access; failures use a labeled local fallback. Production Python dependencies are unchanged. Historical results follow.
+
 # 1.4.2 validation
 
 108 unit/integration tests passed. New tests use real Telethon ParticipantPermissions, ChannelParticipantAdmin and ChannelParticipantCreator objects to verify posting rights, rejection without posting rights, numeric peer resolution and accurate network error propagation. Channel listing tests cover public/private channels, deduplication, read-only/group exclusion and empty results. Browser smoke passed against the real UI/API with simulated Telegram dialogs: fetch, private-channel selection, saving/verifying the marked ID, public-channel branding and responsive layouts. JavaScript syntax passed. No live Telegram account or Windows execution was used. Historical results follow.

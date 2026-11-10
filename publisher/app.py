@@ -128,8 +128,13 @@ class API:
             job=self._store.job(identifier)
             if not job or job['status'] in ('blocked','sending','preparing') or job['error'] in ('analyzing','analysis_required'): raise ValueError('job_locked')
             path,kind=prepare(job,self._store.settings(),self._store.directory/'prepared')
-            return {'filename':path.name,'kind':kind}
+            cover,source=self._engine.build_cover(job,job['scheduled'] or time.time())
+            return {'filename':path.name,'kind':kind,'cover':cover.name,'cover_source':source}
         return self._call(build)
+
+    def cover_preview(self,identifier):
+        path=self._store.directory/'prepared'/f'{int(identifier)}-cover.jpg'
+        return 'data:image/jpeg;base64,'+base64.b64encode(path.read_bytes()).decode() if path.exists() else ''
 
     def open_outputs(self):
         folder=str(self._store.directory/'prepared')

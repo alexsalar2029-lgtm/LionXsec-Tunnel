@@ -31,7 +31,7 @@ class TestAccount:
 
 with tempfile.TemporaryDirectory() as temp:
     base=Path(temp);folder=base/'content';folder.mkdir();store=Store(base/'data');engine=Engine(store,lambda *args:TestAccount())
-    engine.save_settings({**DEFAULTS,'folder':str(folder),'ai':False,'auto_watch':False,'channel':'@example_channel',
+    engine.save_settings({**DEFAULTS,'folder':str(folder),'ai':False,'auto_watch':False,'cover_mode':'local','channel':'@example_channel',
                           'tag':'@example_channel','website':'https://example.com'})
     store.set_credentials('1234567','a'*32,'+989121234567')
     store.set_session('VISUAL-SESSION')
@@ -44,7 +44,7 @@ with tempfile.TemporaryDirectory() as temp:
             browser=p.chromium.launch(headless=True,executable_path=os.environ.get('CHROMIUM_EXECUTABLE') or shutil.which('chromium'),args=['--no-sandbox'])
             page=browser.new_page(viewport={'width':1440,'height':1080},device_scale_factor=1)
             errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
-            allowed=['list_channels','snapshot','detail','preview_caption','thumbnail','edit','save_settings','scan','enable','pause','verify','prepare_copy','remove','reanalyze','acknowledge','login_start','login_code','login_password','login_cancel','disconnect_account','clear_analysis','save_openai_key','clear_openai_key','test_ai']
+            allowed=['cover_preview','list_channels','snapshot','detail','preview_caption','thumbnail','edit','save_settings','scan','enable','pause','verify','prepare_copy','remove','reanalyze','acknowledge','login_start','login_code','login_password','login_cancel','disconnect_account','clear_analysis','save_openai_key','clear_openai_key','test_ai']
             page.expose_function('qaCall',lambda name,args:getattr(api,name)(*args) if name in allowed else None)
             page.add_init_script('window.pywebview={api:Object.fromEntries('+json.dumps(allowed)+'.map(n=>[n,(...a)=>window.qaCall(n,a)]))};')
             page.goto('http://127.0.0.1:'+str(server.server_port),wait_until='networkidle')
@@ -65,9 +65,21 @@ with tempfile.TemporaryDirectory() as temp:
             page.locator('#edit-title').fill('پیش‌نمایش بدون ذخیره')
             expect(page.locator('#caption-preview')).to_contain_text('پیش‌نمایش بدون ذخیره')
             page.screenshot(path=str(ARTIFACTS/'post-preview.png'),full_page=True)
+            page.locator('#edit-title').fill('Design Composition Notes')
+            page.locator('#save-post').click()
+            expect(page.locator('#toast')).to_contain_text('پیش‌نویس ذخیره شد')
+            page.locator('#prepare-copy').click()
+            expect(page.locator('#toast')).to_contain_text('فایل و تصویر آماده شدند')
+            expect(page.locator('#detail-art img')).to_have_attribute('alt','Post cover')
+            expect(page.locator('#caption-preview')).to_contain_text('Published:')
+            page.screenshot(path=str(ARTIFACTS/'english-cover-preview.png'),full_page=True)
+
             page.keyboard.press('Escape')
             page.locator('[data-page=settings]').click()
             expect(page.locator('#account-connected')).to_be_visible()
+            page.locator('#ten-posts').click()
+            assert len(page.locator('[name=times]').input_value().split(','))==10
+
             expect(page.locator('#account-name')).to_have_text('کاربر نمونه')
             page.locator('#load-channels').click()
             expect(page.locator('#channel-picker option')).to_have_count(3)
@@ -99,7 +111,7 @@ with tempfile.TemporaryDirectory() as temp:
             for width in [900,1100,1440]:
                 page.set_viewport_size({'width':width,'height':950})
                 assert page.evaluate('document.documentElement.scrollWidth<=innerWidth'),width
-            page.locator('[data-page=library]').click();page.locator('#search').fill('نور طبیعی')
+            page.locator('[data-page=library]').click();page.locator('#search').fill('lesson-1')
             expect(page.locator('.content-card')).to_have_count(1)
             page.locator('#search').fill('');page.locator('#toggle-run').click()
             expect(page.locator('#state-pill')).to_contain_text('فعال')
@@ -133,7 +145,7 @@ with tempfile.TemporaryDirectory() as temp:
             # All remote model responses are simulated; real file parsing and API bridge remain active.
             def fixture_analyzer(path,kind,config):
                 def transport(payload):
-                    value={'decision':'ready','title':'آموزش '+path.stem,'body':'توضیح آموزشی نمونه',
+                    value={'decision':'ready','title':'Guide to '+path.stem,'body':'Practical notes for this resource.',
                            'reason':'','content_type':'educational','source_date':''}
                     return {'status':'completed','output':[{'type':'message','content':[
                         {'type':'output_text','text':json.dumps(value,ensure_ascii=False)}]}]}

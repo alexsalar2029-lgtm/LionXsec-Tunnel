@@ -24,7 +24,7 @@ KEY='sk-test-fixture-not-a-real-api-key'
 
 
 def response_body(**overrides):
-    result={'decision':'ready','title':'کارگاه عکاسی','body':'آموزش نور طبیعی',
+    result={'decision':'ready','title':'Photography Workshop','body':'Natural light techniques',
             'reason':'','content_type':'educational','source_date':'۱۴۰۵/۰۸/۱۶',**overrides}
     return {'status':'completed','output':[{'type':'message','content':[
         {'type':'output_text','text':json.dumps(result,ensure_ascii=False)}]}]}
@@ -56,7 +56,7 @@ class RescanTests(unittest.TestCase):
         self.source();self.engine._scan();self.engine.edit(1,'Manual title','Manual text')
         self.assertTrue(self.api.scan()['ok']);self.wait_scan()
         self.assertEqual(len(self.jobs()),1)
-        self.assertEqual(self.store.job(1)['title'],'کارگاه عکاسی')
+        self.assertEqual(self.store.job(1)['title'],'lesson')
         self.assertFalse(self.store.settings()['enabled'])
 
     def test_background_scan_preserves_manual_caption_and_does_not_repeat_api_calls(self):
@@ -72,7 +72,7 @@ class RescanTests(unittest.TestCase):
         self.assertTrue(self.api.reanalyze(1)['ok']);self.wait_scan()
         self.assertEqual(len(self.jobs()),1)
         self.assertEqual(self.store.job(1)['status'],'draft')
-        self.assertEqual(self.store.job(1)['title'],'درس اصلاح‌شده')
+        self.assertEqual(self.store.job(1)['title'],'lesson')
 
     def test_rechecking_text_has_no_local_content_gate(self):
         self.source(text='password: synthetic-example-only');self.engine._scan()
@@ -180,7 +180,7 @@ class RescanTests(unittest.TestCase):
         self.assertEqual(job['analysis'],'openai')
         when=datetime(2030,1,2,9,0,tzinfo=ZoneInfo('Asia/Tehran')).timestamp()
         text=caption(job,self.store.settings(),when)
-        self.assertIn('آموزشی',text);self.assertIn('۱۴۰۵/۰۸/۱۶',text);self.assertIn('09:00',text)
+        self.assertIn('Educational',text);self.assertIn('Source date: 2026-',text);self.assertIn('09:00',text)
         self.assertEqual(request.call_args.kwargs['headers']['Authorization'],'Bearer '+KEY)
         self.assertFalse(request.call_args.kwargs['allow_redirects'])
 
@@ -241,7 +241,7 @@ class OpenAIContractTests(unittest.TestCase):
             path=Path(directory)/'lesson.txt';path.write_text('Ordinary text')
             raw={'output':[{'type':'message','content':[{'type':'refusal','refusal':'No'}]}]}
             result=analyze(path,'text',{**DEFAULTS,'ai_provider':'openai','content_restrictions':False},lambda _:raw)
-            self.assertEqual(result['status'],'draft');self.assertEqual(result['title'],'Ordinary text')
+            self.assertEqual(result['status'],'draft');self.assertEqual(result['title'],'lesson')
 
     def test_source_date_cannot_be_invented_for_txt(self):
         with tempfile.TemporaryDirectory() as directory:

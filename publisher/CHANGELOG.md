@@ -1,3 +1,11 @@
+# 1.5.0 — English branded covers and ten daily posts
+
+- Generate English subject-specific captions; use Gregorian publication dates and English signatures. Convert recognizable numeric Jalali source dates for display. Local fallback uses English filenames rather than presenting untranslated Persian captions.
+- Add configurable OpenAI image generation, cached per content/model, with distinct local topic artwork on failure. Compose a geometric lion mark, fitted title, LionXSec brand, signature and date locally so text stays legible. Add an actual cover preview.
+- Send the cover/caption followed by the resource as a reply. Preserve uncertain delivery after a partial pair or network timeout to prevent blind duplicate cover posts.
+- Migrate to ten daily Tehran slots from 09:00 to 21:00, 80 minutes apart. Count sent/reserved jobs during slot allocation; preserve sent history and require fresh English analysis for old unsent jobs. Keep missed-slot handling without catch-up bursts.
+- Add image contract/cache/fallback, text fitting, daily-cap, migration and linked-delivery tests. Browser and native desktop checks cover the new preview flow; live services remain untested.
+
 # 1.4.2 — Private channel selection and administrator permissions
 
 - Fix permission checks to read Telethon ParticipantPermissions.post_messages instead of a nonexistent admin_rights field; preserve creator access and require actual post permission for channel administrators.

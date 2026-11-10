@@ -38,7 +38,7 @@ def _request(method, path, key, **kwargs):
     try:
         response = requests.request(method, OPENAI_API + path,
                                     headers={'Authorization': 'Bearer ' + key},
-                                    timeout=(3, 20), allow_redirects=False, **kwargs)
+                                    timeout=kwargs.pop('timeout',(3,20)), allow_redirects=False, **kwargs)
     except requests.RequestException:
         raise AIError('openai_unavailable') from None
     codes = {401: 'openai_unauthorized', 403: 'openai_forbidden',
@@ -90,3 +90,10 @@ def openai_analysis(prompt, filename, kind, text, images, model, key, transport=
         return result
     except (ValueError, KeyError, TypeError, AttributeError):
         raise AIError('ai_invalid_response') from None
+
+
+def generate_background(prompt,model,key):
+    result=_request('POST','/images/generations',key,timeout=(5,90),json={
+        'model':model,'prompt':prompt,'n':1,'size':'1536x1024','quality':'low'})
+    try: return base64.b64decode(result['data'][0]['b64_json'],validate=True)
+    except (KeyError,IndexError,ValueError,TypeError): raise AIError('image_invalid_response') from None

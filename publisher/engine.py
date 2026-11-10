@@ -1,5 +1,6 @@
 """Background intake and one-at-a-time, restart-safe scheduled publication."""
 from datetime import datetime,timedelta
+from collections import Counter
 from pathlib import Path
 import re
 import hashlib
@@ -17,7 +18,7 @@ from storage import DEFAULTS,atomic_write
 def validate_settings(data):
     if not isinstance(data,dict): raise ValueError('invalid_settings')
     value={**DEFAULTS,**{k:v for k,v in data.items() if k in DEFAULTS and k!='enabled'}}
-    for key in ['folder','channel','tag','website','timezone','model','brand','ai_provider','openai_model',
+    for key in ['folder','channel','tag','website','timezone','model','brand','ai_provider','openai_model','image_model','cover_mode',
                 'account_name','account_username','account_phone']:
         if not isinstance(value[key],str): raise ValueError('invalid_settings')
         value[key]=value[key].strip()
@@ -30,6 +31,8 @@ def validate_settings(data):
         u=urlparse(value['website'])
         if u.scheme not in ('https','http') or not u.hostname or u.username or len(value['website'])>240: raise ValueError('website_invalid')
     if not re.fullmatch(r'[A-Za-z0-9._:/-]{1,100}',value['model']): raise ValueError('model_invalid')
+    if value['cover_mode'] not in ('local','openai'): raise ValueError('invalid_settings')
+    if not re.fullmatch(r'[A-Za-z0-9._-]{1,100}',value['image_model']): raise ValueError('model_invalid')
     if value['ai_provider'] not in ('ollama','openai'): raise ValueError('invalid_settings')
     if not re.fullmatch(r'[A-Za-z0-9._-]{1,100}',value['openai_model']): raise ValueError('model_invalid')
     try: ZoneInfo(value['timezone'])
@@ -50,8 +53,10 @@ def validate_settings(data):
 def next_slot(settings,after,occupied=()):
     zone=ZoneInfo(settings['timezone']);start=datetime.fromtimestamp(after,zone)
     taken={int(x) for x in occupied}
+    day_counts=Counter(datetime.fromtimestamp(t,zone).date() for t in occupied)
     for day in range(3670):
         date=start.date()+timedelta(days=day)
+        if day_counts[date]>=len(settings['times']): continue
         for text in settings['times']:
             hour,minute=map(int,text.split(':'))
             local=datetime(date.year,date.month,date.day,hour,minute,tzinfo=zone)
@@ -65,7 +70,7 @@ def next_slot(settings,after,occupied=()):
 class Engine:
     def __init__(self,store,mtproto_factory=MTProto,analyzer=analyze,clock=time.time):
         self.store=store;self.mtproto_factory=mtproto_factory;self.analyzer=analyzer;self.clock=clock
-        self.stop_event=threading.Event();self.lock=threading.RLock();self.scan_lock=threading.Lock()
+        self.stop_event=threading.Event();self.lock=threading.RLock();self.scan_lock=threading.Lock();self.cover_lock=threading.Lock()
         self.runtime={'scanning':False,'scanned':0,'total':0,'current':'','sending':False}
         self.last_scan=0;self.thread=None;self.revision=0
         self._account=None;self._login=None;self.login_lock=threading.Lock()
@@ -230,7 +235,7 @@ class Engine:
         return {'provider':'ollama','model':model}
 
     def _assign(self,db,config,now):
-        occupied=[r[0] for r in db.execute("SELECT scheduled FROM jobs WHERE status='scheduled'")]
+        occupied=[r[0] for r in db.execute("SELECT COALESCE(sent,scheduled) FROM jobs WHERE status IN ('scheduled','sent','preparing','sending','uncertain') AND COALESCE(sent,scheduled) IS NOT NULL")]
         rows=db.execute("SELECT id FROM jobs WHERE status='draft' AND error='' AND title<>'' ORDER BY id").fetchall()
         for row in rows:
             slot=next_slot(config,now,occupied);occupied.append(slot)
@@ -329,7 +334,7 @@ class Engine:
                         analysis_settings['_openai_key']=self.store.openai_key()
                     if ai_unavailable: analysis_settings['ai']=False
                     result=self.analyzer(path,kind,analysis_settings)
-                    if result.get('analysis','').startswith('fallback:'):
+                    if result.get('analysis','').startswith('fallback:') and result.get('analysis')!='fallback:local':
                         ai_unavailable=True
                         self.store.event('هوش مصنوعی پاسخ قابل استفاده نداد؛ ادامهٔ این بررسی با متن و نام فایل انجام می‌شود.','warning')
                 except ContentError as error:
@@ -378,6 +383,14 @@ class Engine:
             return {'cleared':len(rows)}
         finally: self.scan_lock.release()
 
+    def build_cover(self,job,when=None):
+        from covers import make_cover
+        config=self.store.settings()
+        config['_openai_key']=self.store.openai_key()
+        with self.cover_lock: result=make_cover(job,config,self.store.directory/'prepared',when or self.clock())
+        if result[1]=='local-fallback': self.store.event('تصویر OpenAI آماده نشد؛ طرح محلی برای پست '+str(job['id'])+' ساخته شد.','warning')
+        return result
+
     def edit(self,identifier,title,body):
         if not isinstance(title,str) or not title.strip() or len(title)>100 or not isinstance(body,str) or len(body)>500: raise ValueError('caption_invalid')
         with self.lock,self.store.db() as db:
@@ -412,6 +425,7 @@ class Engine:
         self.runtime['sending']=True
         try:
             path,kind=prepare(job,config,self.store.directory/'prepared')
+            job['cover_path']=str(self.build_cover(job,self.clock())[0])
             with self.lock:
                 if not self.store.settings()['enabled'] or self.stop_event.is_set() or revision!=self.revision:
                     with self.store.db() as db: db.execute("UPDATE jobs SET status='draft',scheduled=NULL WHERE id=?",(job['id'],))
@@ -436,7 +450,7 @@ class Engine:
             else: status='failed'
             if error.code in ('session_invalid','account_not_logged_in'): self.close_account()
             with self.store.db() as db:
-                occupied=[r[0] for r in db.execute("SELECT scheduled FROM jobs WHERE status='scheduled'")]
+                occupied=[r[0] for r in db.execute("SELECT COALESCE(sent,scheduled) FROM jobs WHERE id<>? AND status IN ('scheduled','sent','preparing','sending','uncertain') AND COALESCE(sent,scheduled) IS NOT NULL",(job['id'],))]
                 slot=next_slot(config,self.clock()+error.retry_after,occupied) if status=='scheduled' else None
                 db.execute('UPDATE jobs SET status=?,error=?,attempts=?,scheduled=?,updated=? WHERE id=?',(status,error.code,attempts,slot,self.clock(),job['id']))
             self.store.event('ارسال پست شمارهٔ '+str(job['id'])+' نیاز به بررسی دارد.','warning')
