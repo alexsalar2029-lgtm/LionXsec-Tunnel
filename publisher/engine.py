@@ -410,16 +410,34 @@ class Engine:
             if action=='sent': db.execute("UPDATE jobs SET status='sent',sent=?,error='' WHERE id=?",(self.clock(),int(identifier)))
             else: db.execute("UPDATE jobs SET status='draft',error='',scheduled=NULL WHERE id=?",(int(identifier),))
 
-    def tick(self):
+    def send_now(self,identifier):
+        with self.lock:
+            revision=self.revision
+        self.verify()
+        with self.lock:
+            if revision!=self.revision: raise ValueError('changed_during_verification')
+            self.tick(immediate=int(identifier))
+        return {'status':self.store.job(int(identifier))['status']}
+
+    def tick(self,immediate=None):
         now=self.clock()
         with self.lock,self.store.db() as db:
             config=self.store.settings()
             revision=self.revision
-            if not config['enabled']: return False
+            if immediate is None and not config['enabled']: return False
+            if self.runtime['sending']: raise ValueError('job_locked')
+            if immediate is not None and self.runtime['scanning']: raise ValueError('scan_busy')
             db.execute('BEGIN IMMEDIATE')
-            db.execute("UPDATE jobs SET status='draft',scheduled=NULL,error='' WHERE status='scheduled' AND scheduled<?",(now-300,))
-            self._assign(db,config,now)
-            row=db.execute("SELECT * FROM jobs WHERE status='scheduled' AND scheduled<=? ORDER BY scheduled,id LIMIT 1",(now,)).fetchone()
+            if immediate is None:
+                db.execute("UPDATE jobs SET status='draft',scheduled=NULL,error='' WHERE status='scheduled' AND scheduled<?",(now-300,))
+                self._assign(db,config,now)
+                row=db.execute("SELECT * FROM jobs WHERE status='scheduled' AND scheduled<=? ORDER BY scheduled,id LIMIT 1",(now,)).fetchone()
+            else:
+                row=db.execute('SELECT * FROM jobs WHERE id=?',(immediate,)).fetchone()
+                if not row or row['status'] not in ('draft','scheduled') or row['error'] or not row['title']: raise ValueError('job_locked')
+                if row['scheduled'] and row['scheduled']>now and row['attempts']: raise ValueError('job_locked')
+                db.execute('UPDATE jobs SET channel=?,scheduled=? WHERE id=?',(config['channel'],now,immediate))
+                row=db.execute('SELECT * FROM jobs WHERE id=?',(immediate,)).fetchone()
             if not row: return False
             job=dict(row);db.execute("UPDATE jobs SET status='preparing',updated=? WHERE id=?",(now,job['id']))
         self.runtime['sending']=True
@@ -427,7 +445,7 @@ class Engine:
             path,kind=prepare(job,config,self.store.directory/'prepared')
             job['cover_path']=str(self.build_cover(job,self.clock())[0])
             with self.lock:
-                if not self.store.settings()['enabled'] or self.stop_event.is_set() or revision!=self.revision:
+                if (immediate is None and not self.store.settings()['enabled']) or self.stop_event.is_set() or revision!=self.revision:
                     with self.store.db() as db: db.execute("UPDATE jobs SET status='draft',scheduled=NULL WHERE id=?",(job['id'],))
                     return True
                 text=caption(job,config,self.clock())

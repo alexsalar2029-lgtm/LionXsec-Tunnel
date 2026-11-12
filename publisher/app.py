@@ -83,6 +83,7 @@ class API:
 
     def save_settings(self,data): return self._call(self._engine.save_settings,data)
     def list_channels(self): return self._call(self._engine.list_channels)
+    def send_now(self,identifier): return self._call(self._engine.send_now,identifier)
     def verify(self): return self._call(self._engine.verify)
     def login_start(self,api_id,api_hash,phone): return self._call(self._engine.login_start,api_id,api_hash,phone)
     def login_code(self,code): return self._call(self._engine.login_code,code)

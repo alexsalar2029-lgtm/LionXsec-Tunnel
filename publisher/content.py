@@ -272,7 +272,7 @@ def caption(job,settings,when):
     footer+='\n\nPublished: '+date
     footer+='\n'+settings.get('brand','LionXSec')+' | Digital Resources'
     if identity(settings): footer+='\n'+identity(settings)
-    if settings['website']: footer+='\n'+settings['website']
+    if settings['website']: footer+='\nExplore products & resources\n'+settings['website']
     limit=1024
     if settings.get('caption_format')=='custom':
         template=validate_caption_template(settings['caption_template'],settings.get('content_restrictions',True))

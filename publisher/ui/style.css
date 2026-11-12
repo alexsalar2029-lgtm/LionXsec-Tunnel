@@ -13,3 +13,5 @@
 .login-card .settings-title{margin-bottom:18px}
 
 .folder-actions{display:flex;flex-direction:column;gap:8px;flex-shrink:0}.folder-actions .button{justify-content:center}.post-secondary{flex-wrap:wrap;gap:12px}#clear-dialog{max-width:540px}#clear-dialog>p{padding:0 24px 20px;line-height:2;color:var(--muted)}#clear-dialog>.post-secondary{padding:0 24px 24px}#openai-options[hidden],#ollama-options[hidden]{display:none}.content-category{font-size:11px;color:#a59ec2;margin-top:6px}
+
+.library-bar{flex-wrap:wrap}.library-bar select{background:#17191f;color:#ededf3;border:1px solid #37333e;border-radius:7px;padding:7px}#send-now{margin-top:8px}

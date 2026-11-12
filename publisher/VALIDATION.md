@@ -1,3 +1,7 @@
+# 1.5.3 validation
+
+131 automated tests passed, including immediate send while paused, duplicate-send rejection and analysis-required rejection. Browser smoke, real FFmpeg media smoke, dependency consistency and JavaScript syntax passed. Live Telegram, OpenAI and Windows remain untested.
+
 # 1.5.2 validation
 
 129 unit/integration tests passed. Native Qt WebEngine smoke passed with simulated Telegram delivery. A generated cover was visually inspected for the new lion mark, website, readable signature and date without a clock/timezone. Live Telegram, OpenAI analysis and Windows Server 2016 remain untested. File classification is heuristic; malformed or unsupported formats may still need manual review.

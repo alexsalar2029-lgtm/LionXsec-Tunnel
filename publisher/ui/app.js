@@ -41,7 +41,8 @@ function render(){
  $('#foot-status').textContent=r.sending?'یک پست در حال آماده‌سازی یا ارسال است':s.enabled?'برای انتشار، برنامه و کامپیوتر روشن بمانند':s.ai&&s.ai_provider==='openai'?'تحلیل با OpenAI؛ انتشار پس از فعال‌سازی':'آماده‌سازی محلی؛ انتشار پس از فعال‌سازی';
  $('.zone-label').textContent=s.timezone||'Asia/Tehran';if(pageName==='library')renderLibrary();if(pageName==='queue')renderQueue();if(pageName==='activity')renderEvents();
 }
-function matches(job){const q=$('#search').value.trim().toLowerCase();return (filter==='all'||(filter==='review'?['review','failed','blocked','uncertain'].includes(job.status):job.status===filter))&&(!q||(job.title+' '+job.filename).toLowerCase().includes(q));}
+function fileCategory(job){const ext=job.filename.split('.').pop().toLowerCase();return ext==='svb'?'svb':job.kind==='video'?'video':ext==='txt'?'txt':'other';}
+function matches(job){const q=$('#search').value.trim().toLowerCase();return ($('#kind-filter').value==='all'||fileCategory(job)===$('#kind-filter').value)&&(filter==='all'||(filter==='review'?['review','failed','blocked','uncertain'].includes(job.status):job.status===filter))&&(!q||(job.title+' '+job.filename).toLowerCase().includes(q));}
 function renderLibrary(force=false){
  const jobs=state.jobs.filter(matches);const signature=JSON.stringify(jobs.map(x=>[x.id,x.title,x.status,x.error,x.updated,x.scheduled,x.content_type,x.source_date,x.kind]));if(!force&&signature===librarySignature)return;librarySignature=signature;thumbs.clear();
  $('#content-grid').replaceChildren();$('#empty-state').hidden=!!jobs.length;
@@ -71,6 +72,7 @@ async function openPost(id){
  $('#preview-channel').replaceChildren(document.createTextNode(state.settings.tag||state.settings.channel||'کانال شما'));const small=document.createElement('small');small.textContent='پیش‌نمایش پست تلگرام';$('#preview-channel').append(small);
  $('#detail-error').textContent=j.error?errorMessage(j.error):j.kind==='text'?'لینک‌ها داخل نسخهٔ جدید فایل هم درج می‌شوند.':'';$('#detail-time').textContent=j.scheduled?'نوبت انتشار: '+date(j.scheduled):'زمان ارسال، پس از فعال‌کردن زمان‌بندی مشخص می‌شود.';
  $('#detail-type').textContent='نوع فایل: '+(fileKinds[j.kind]||j.kind)+' · نوع محتوا: '+(contentTypes[j.content_type]||'هنوز بررسی نشده');$('#detail-source-date').textContent=j.source_date?'تاریخ درج‌شده در منبع: '+j.source_date:'تاریخی از منبع تشخیص داده نشده است.';
+ $('#send-now').disabled=!['draft','scheduled'].includes(j.status)||!!j.error||!!state.runtime.sending;
  const locked=['sent','sending','preparing','blocked','uncertain'].includes(j.status)||['analyzing','analysis_required'].includes(j.error);for(const id of ['edit-title','edit-body','save-post'])$('#'+id).disabled=locked;for(const id of ['reanalyze','clear-post'])$('#'+id).disabled=['sent','sending','preparing','uncertain'].includes(j.status)||!!state.runtime.scanning;$('#prepare-copy').disabled=['blocked','sending','preparing'].includes(j.status)||['analyzing','analysis_required'].includes(j.error);$('#exclude-post').disabled=['sent','sending','preparing','blocked','uncertain'].includes(j.status);$('#uncertain-actions').hidden=j.status!=='uncertain';
  $('#detail-art').innerHTML=`<i>${icon(j.kind==='photo'?'image':j.kind==='video'?'video':'files')}</i>`;if(['photo','video'].includes(j.kind)&&j.status!=='blocked'){const img=thumbs.get(j.id)||await api.thumbnail(j.id);if(img){$('#detail-art').replaceChildren();const image=document.createElement('img');image.src=img;image.alt='پیش‌نمایش رسانه';$('#detail-art').append(image);}}
  if(!$('#post-dialog').open)$('#post-dialog').showModal();
@@ -138,3 +140,6 @@ $('#login-check-password').addEventListener('click',()=>action($('#login-check-p
 for(const [button,step] of [['login-cancel-code','keys'],['login-cancel-password','keys']])$('#'+button).addEventListener('click',()=>action($('#'+button),async()=>{await call('login_cancel');switchLoginStage(step);loginNotice('ورود لغو شد.');}));
 $('#logout-account').addEventListener('click',()=>action($('#logout-account'),async()=>{await call('disconnect_account');clearLoginFields();loginNotice('');notice('از حساب تلگرام خارج شدی.');}));
 boot();
+
+$('#kind-filter').addEventListener('change',()=>renderLibrary(true));
+$('#send-now').addEventListener('click',()=>action($('#send-now'),async()=>{const result=await call('send_now',activeId);await openPost(activeId);notice(result.status==='sent'?'پست با موفقیت ارسال شد.':'ارسال کامل نشد؛ وضعیت و گزارش را بررسی کنید.');}));
