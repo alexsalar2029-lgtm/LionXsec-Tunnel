@@ -22,7 +22,7 @@ from text_branding import clean_references,clean_stem,branded_filename,identity
 
 # Known extensions map to photo/video/text kinds; every other extension is sent as a plain document.
 KINDS={'.jpg':'photo','.jpeg':'photo','.png':'photo','.webp':'photo',
-       '.mp4':'video','.mov':'video','.mkv':'video','.webm':'video',
+       '.mp4':'video','.mov':'video','.mkv':'video','.webm':'video','.avi':'video','.m4v':'video','.mpeg':'video','.mpg':'video','.wmv':'video','.flv':'video',
        '.txt':'text','.md':'text','.pdf':'document'}
 # No app-side size cap: any file of any size is queued; Telegram's own per-account
 # limit (2 GB regular, 4 GB Premium) is the only boundary left.
@@ -46,9 +46,26 @@ class ContentError(Exception):
     def __init__(self,code): self.code=code;super().__init__(code)
 
 
+def companion_files(path):
+    path=Path(path)
+    siblings=[p for p in path.parent.iterdir() if p.is_file() and not p.is_symlink() and p.stem.casefold()==path.stem.casefold()]
+    videos=[p for p in siblings if KINDS.get(p.suffix.lower())=='video']
+    if len(videos)!=1 or videos[0]!=path: return []
+    return sorted((p for p in siblings if p!=path and KINDS.get(p.suffix.lower()) not in ('photo','video')),key=lambda p:p.name)
+
+
+def companion_owner(path):
+    path=Path(path)
+    if KINDS.get(path.suffix.lower()) in ('photo','video'): return None
+    videos=[p for p in path.parent.iterdir() if p.is_file() and not p.is_symlink() and p.stem.casefold()==path.stem.casefold() and KINDS.get(p.suffix.lower())=='video']
+    return videos[0] if len(videos)==1 else None
+
+
 def fingerprint(path):
     # Constant-time change detection; do not read entire videos on every poll.
     path=Path(path);stat=path.stat();parts=[stat.st_size,stat.st_mtime_ns]
+    for companion in companion_files(path):
+        stat=companion.stat();parts.extend([companion.name,stat.st_size,stat.st_mtime_ns])
     sidecar=Path(str(path)+'.caption.txt')
     if sidecar.exists():
         stat=sidecar.stat();parts.extend([stat.st_size,stat.st_mtime_ns])
@@ -73,6 +90,7 @@ def detect_kind(path):
     if header.startswith((b'%PDF-',b'PK\x03\x04',b'PK\x05\x06',b'7z\xbc\xaf\x27\x1c',b'Rar!',b'\x1f\x8b')): return 'document'
     if header.startswith((b'\xff\xd8\xff',b'\x89PNG\r\n\x1a\n',b'GIF87a',b'GIF89a',b'BM')) or (header[:4]==b'RIFF' and header[8:12]==b'WEBP'):
         return 'photo'
+    if (header[:4]==b'RIFF' and header[8:12]==b'AVI ') or header.startswith(b'FLV'): return 'video'
     if header[4:8]==b'ftyp' or header.startswith(b'\x1aE\xdf\xa3'): return 'video'
     if expected=='text' and b'\0' in header and not header.startswith((b'\xff\xfe',b'\xfe\xff')):
         raise ContentError('text_encoding')
@@ -269,10 +287,10 @@ def caption(job,settings,when):
     if content_type and job.get('content_type')!='other': footer+='\n\n🏷 '+content_type
     source_date=english_source_date(job.get('source_date',''))
     if source_date: footer+='\nSource date: '+source_date[:80]
-    footer+='\n\nPublished: '+date
-    footer+='\n'+settings.get('brand','LionXSec')+' | Digital Resources'
+    footer+='\n\n━━━━━━━━━━━━━━\n📅 Published: '+date
+    footer+='\n🦁 '+settings.get('brand','LionXSec')+' | Digital Resources'
     if identity(settings): footer+='\n'+identity(settings)
-    if settings['website']: footer+='\nExplore products & resources\n'+settings['website']
+    if settings['website']: footer+='\n🌐 '+settings['website']
     limit=1024
     if settings.get('caption_format')=='custom':
         template=validate_caption_template(settings['caption_template'],settings.get('content_restrictions',True))

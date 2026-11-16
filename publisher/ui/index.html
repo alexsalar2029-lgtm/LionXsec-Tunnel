@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b0c0f"><title>LIONXSEC Publisher</title><link rel="stylesheet" href="style.css?v=1.5.3"><script defer src="app.js?v=1.5.3"></script></head>
+<html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b0c0f"><title>LIONXSEC Publisher</title><link rel="stylesheet" href="style.css?v=1.5.4"><script defer src="app.js?v=1.5.4"></script></head>
 <body>
 <div id="boot" class="boot"><div class="boot-symbol">L<span>✦</span></div><b>LIONXSEC PUBLISHER</b><p id="boot-message">در حال باز کردن فضای کاری…</p><small>با فایل START-LIONXSEC.cmd اجرا کنید.</small></div>
 <aside class="sidebar">
@@ -57,14 +57,14 @@
     <label>شناسهٔ کانال مقصد<input name="channel" dir="ltr" placeholder="@your_channel یا -1001234567890" maxlength="64"></label><p class="field-help">برای کانال عمومی <span dir="ltr">@username</span> و برای کانال خصوصی شناسهٔ عددی ‎-100… لازم است؛ لینک دعوت، شناسهٔ مقصد نیست. حساب واردشده باید اجازهٔ ارسال پست در این کانال را داشته باشد.</p>
     <button type="button" class="button subtle full" id="verify"><i data-icon="link"></i>ذخیره و بررسی اتصال</button><p id="verify-result" class="test-result"></p>
    </div>
-   <div class="settings-card"><div class="settings-title"><span class="stat-icon blue"><i data-icon="pen"></i></span><div><h2>امضای محتوا</h2><p>این اطلاعات به کپشن اضافه می‌شود؛ در TXT فقط شناسهٔ کانال شما درج می‌شود.</p></div></div>
+   <div class="settings-card"><div class="settings-title"><span class="stat-icon blue"><i data-icon="pen"></i></span><div><h2>امضای محتوا</h2><p>این اطلاعات به کپشن اضافه می‌شود؛ در TXT شناسه‌ها و لینک‌های تلگرام با امضای شما جایگزین می‌شوند.</p></div></div>
     <label>تگ یا لینک کانال<input name="tag" dir="ltr" placeholder="@your_channel یا https://t.me/your_channel" maxlength="180"></label><label>لینک سایت<input name="website" dir="ltr" placeholder="https://your-site.com" maxlength="240"></label>
     <label>محل درج لینک در فایل متنی<select name="text_placement"><option value="footer">انتهای فایل</option><option value="header">ابتدای فایل</option></select></label>
     <label class="check-label"><input type="checkbox" name="watermark"><span>تگ و لینک روی عکس و ویدیو هم درج شود</span></label><p class="field-help">فایل متنی و رسانهٔ ویرایش‌شده در پوشهٔ خروجی ساخته می‌شوند؛ اصل فایل بازنویسی نمی‌شود.</p>
    </div>
    <div class="settings-card"><div class="settings-title"><span class="stat-icon amber"><i data-icon="calendar"></i></span><div><h2>ریتم انتشار</h2><p>ساعت‌ها در منطقهٔ زمانی انتخابی هستند.</p></div></div>
     <label>ساعت‌های انتشار<input name="times" dir="ltr" placeholder="09:00, 10:20, …, 21:00"></label><p class="field-help">ساعت‌ها را با ویرگول جدا کن؛ برای هر نوبت، یک فایل از صف انتخاب می‌شود.</p>
-    <button type="button" class="button subtle full" id="ten-posts">۱۰ پست روزانه؛ ۰۹:۰۰ تا ۲۱:۰۰</button><p class="field-help">هر نوبت یک پست شامل تصویر و فایل مرتبط است؛ نوبت‌های ازدست‌رفته پشت سر هم ارسال نمی‌شوند. تاریخ انتشار میلادی است.</p><label>منطقهٔ زمانی<select name="timezone"><option value="Asia/Tehran">ایران — تهران</option><option value="Asia/Dubai">امارات — دبی</option><option value="UTC">UTC</option></select></label>
+    <label>تعداد پست روزانه<input id="daily-count" type="number" min="1" max="24" value="10"></label><label>شروع انتشار<input id="daily-start" type="time" value="09:00"></label><label>پایان انتشار<input id="daily-end" type="time" value="21:00"></label><button type="button" class="button subtle full" id="ten-posts">ساخت ساعت‌ها با تعداد و بازهٔ انتخابی</button><p class="field-help">هر نوبت یک پست شامل تصویر و فایل مرتبط است؛ نوبت‌های ازدست‌رفته پشت سر هم ارسال نمی‌شوند. تاریخ انتشار میلادی است.</p><label>منطقهٔ زمانی<select name="timezone"><option value="Asia/Tehran">ایران — تهران</option><option value="Asia/Dubai">امارات — دبی</option><option value="UTC">UTC</option></select></label>
     <label class="check-label"><input type="checkbox" name="auto_watch"><span>هنگام فعال‌بودن، فایل‌های جدید پوشه هم بررسی شوند</span></label><label class="check-label"><input type="checkbox" name="recursive"><span>زیرپوشه‌ها هم خوانده شوند</span></label>
    </div>
    <div class="settings-card"><div class="settings-title"><span class="stat-icon green"><i data-icon="spark"></i></span><div><h2>هوش مصنوعی محتوا</h2><p>عنوان، کپشن، نوع محتوا و تاریخ درج‌شده در منبع.</p></div></div>

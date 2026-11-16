@@ -1,3 +1,4 @@
+from pathlib import Path
 """MTProto connection for the user's own Telegram account.
 
 Login is an interactive three-step flow: app credentials (api_id/api_hash) plus phone
@@ -181,14 +182,14 @@ class MTProto:
         return target
 
     def send(self,job,caption,path,kind):
-        try: message=self._run(self._deliver(job['channel'],caption,str(path),kind,job.get('cover_path')),timeout=UPLOAD_TIMEOUT)
+        try: message=self._run(self._deliver(job['channel'],caption,str(path),kind,job.get('cover_path'),job.get('companions')),timeout=UPLOAD_TIMEOUT)
         except TelegramError as error:
             if job.get('cover_path') and error.code in ('connection_timeout','connection_failed','telegram_request'):
                 raise TelegramError('delivery_unknown',uncertain=True) from None
             raise
         return {'message_id':int(message.id)}
 
-    async def _deliver(self,channel,caption,path,kind,cover=None):
+    async def _deliver(self,channel,caption,path,kind,cover=None,companions=None):
         entity=await self._resolve(channel)
         if cover:
             photo=await self._client.send_file(entity,cover,caption=caption,force_document=False)
@@ -200,7 +201,13 @@ class MTProto:
             return await self._client.send_message(entity,caption,link_preview=False)
         options={'caption':caption,'force_document':kind=='document'}
         if kind=='video': options['supports_streaming']=True
-        return await self._client.send_file(entity,path,**options)
+        message=await self._client.send_file(entity,path,**options)
+        try:
+            for companion in companions or []:
+                await self._client.send_file(entity,companion,caption='📎 '+Path(companion).name,force_document=True,reply_to=message.id)
+        except Exception:
+            raise TelegramError('delivery_unknown',uncertain=True) from None
+        return message
 
     # ----- lifecycle ------------------------------------------------------
     def disconnect(self):

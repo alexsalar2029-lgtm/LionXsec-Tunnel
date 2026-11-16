@@ -152,7 +152,7 @@ class PublisherTests(unittest.TestCase):
 
     def test_current_source_and_new_files_are_accepted(self):
         path=self.source();self.scan();self.due();path.write_text('Changed data',encoding='utf-8')
-        self.engine.tick();self.assertEqual(self.store.job(1)['status'],'sent');self.assertIn(b'Changed data',self.publisher().deliveries[0]['bytes'])
+        self.engine.tick();self.assertEqual(self.store.job(1)['status'],'review');self.assertEqual(self.store.job(1)['error'],'file_changed');self.assertEqual(len(self.publisher().deliveries),0)
         self.source('private.txt','password: synthetic-example-only')
         jobs=self.scan();self.assertTrue(any(j['filename']=='private.txt' and j['status'] in ('draft','scheduled') for j in jobs))
 

@@ -40,9 +40,9 @@ class CreditCleanupTests(unittest.TestCase):
             result=prepare_text(source,{'channel':'@my_channel'},out,1)
             self.assertEqual(result.name,'1-Guide-@my_channel.txt')
             body=result.read_text(encoding='utf-8-sig')
-            self.assertNotIn('Config',body);self.assertNotIn('MrStealer',body)
+            self.assertIn('Config',body);self.assertNotIn('MrStealer',body)
             self.assertIn('Original resource instructions stay intact.',body)
-            self.assertEqual(body.count('@my_channel'),1)
+            self.assertEqual(body.count('@my_channel'),2)
             self.assertEqual(before,source.read_bytes())
 
     def test_binary_name_cleaned_without_changing_bytes(self):
@@ -50,7 +50,7 @@ class CreditCleanupTests(unittest.TestCase):
             root=Path(d);out=root/'out';out.mkdir()
             source=root/'Guide_Config_By_@MrStealer.pdf';source.write_bytes(b'%PDF-example')
             result,kind=prepare({'path':str(source),'kind':'document','id':4},
-                                {**DEFAULTS,'channel':'@my_channel'},out)
+                                {**DEFAULTS,'channel':'@my_channel','tag':''},out)
             self.assertEqual(result.name,'4-Guide-@my_channel.pdf')
             self.assertEqual(result.read_bytes(),source.read_bytes())
 
@@ -65,5 +65,5 @@ class CreditCleanupTests(unittest.TestCase):
             root=Path(d);out=root/'out';out.mkdir();source=root/'large.txt'
             source.write_text('x'*65529+' Config By @MrStealer '+('y'*200000),encoding='utf-8')
             body=prepare_text(source,{'channel':'@own'},out,1).read_text(encoding='utf-8-sig')
-            self.assertNotIn('Config',body);self.assertNotIn('MrStealer',body)
-            self.assertEqual(body.count('x'),65529);self.assertEqual(body.count('y'),200000)
+            self.assertIn('Config',body);self.assertNotIn('MrStealer',body)
+            self.assertEqual(body.count('x'),65529);self.assertEqual(body.count('y'),200001) # preserved word By

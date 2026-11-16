@@ -1,3 +1,7 @@
+# 1.5.4
+
+135 automated Python tests; real FFmpeg media smoke; offscreen Qt desktop and JS bridge smoke; JavaScript schedule generator (five slots, one slot, invalid count) passed. Live Telegram and Windows remain untested. Companion delivery was tested with simulated Telegram, including partial failure.
+
 # 1.5.3 validation
 
 131 automated tests passed, including immediate send while paused, duplicate-send rejection and analysis-required rejection. Browser smoke, real FFmpeg media smoke, dependency consistency and JavaScript syntax passed. Live Telegram, OpenAI and Windows remain untested.

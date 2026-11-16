@@ -52,7 +52,7 @@ def branded_filename(path,settings,identifier):
 def identity(settings):
     tag=settings.get('tag','').strip();channel=settings.get('channel','').strip()
     # The public destination ID is authoritative; private channels can use their configured public tag.
-    return channel if channel.startswith('@') else tag or channel
+    return tag if tag.startswith('https://t.me/') else (channel if channel.startswith('@') else tag) or 'https://t.me/link_Lion'
 
 
 def encoding_for(path):
@@ -83,7 +83,7 @@ def prepare_text(path,settings,destination,identifier):
                 pending+=block
                 boundary=pending.rfind('\n')
                 if boundary>=0:
-                    target.write(clean_references(pending[:boundary+1]));pending=pending[boundary+1:]
+                    target.write(replace_references(pending[:boundary+1],own));pending=pending[boundary+1:]
                 # Bound memory even for a very large single line; leave overlap for reference tokens.
                 while len(pending)>131072:
                     boundary=65536
@@ -93,10 +93,15 @@ def prepare_text(path,settings,destination,identifier):
                     for pattern in (CREDIT,OLD_STAMP,re.compile(r'&[^;\s]{0,24};')):
                         for token in pattern.finditer(pending):
                             if token.start()<boundary<token.end(): boundary=token.start();break
-                    target.write(clean_references(pending[:boundary]));pending=pending[boundary:]
-            target.write(clean_references(pending))
+                    target.write(replace_references(pending[:boundary],own));pending=pending[boundary:]
+            target.write(replace_references(pending,own))
             if settings.get('text_placement')!='header': target.write('\n\n'+own+'\n')
         return output
     except Exception:
         output.unlink(missing_ok=True)
         raise
+
+
+def replace_references(text, own):
+    """Replace only Telegram references; preserve all other source characters."""
+    return REFERENCES.sub(lambda match: own, text)

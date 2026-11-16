@@ -7,7 +7,7 @@ from storage import DEFAULTS, Store
 class SignatureDetectionTests(unittest.TestCase):
     def test_signature_has_date_site_without_clock(self):
         output=caption({'title':'Example','body':'Useful content','filename':'example.txt'},DEFAULTS,1794331800)
-        self.assertIn('https://lionxsec.sbs/',output)
+        self.assertIn('https://lionxsec.sbs',output)
         self.assertIn('Published: 2026-11-10',output)
         self.assertNotIn('Asia/Tehran',output)
         self.assertNotRegex(output,r'\d\d:\d\d')
@@ -38,7 +38,7 @@ class SignatureDetectionTests(unittest.TestCase):
 
     def test_website_migration_only_runs_once(self):
         with tempfile.TemporaryDirectory() as d:
-            store=Store(Path(d));self.assertEqual(store.settings()['website'],'https://lionxsec.sbs/')
+            store=Store(Path(d));self.assertEqual(store.settings()['website'],'https://lionxsec.sbs')
             with store.db() as db:
                 db.execute("UPDATE settings SET value=? WHERE key='website'",('"https://example.org/"',))
             reopened=Store(Path(d));self.assertEqual(reopened.settings()['website'],'https://example.org/')

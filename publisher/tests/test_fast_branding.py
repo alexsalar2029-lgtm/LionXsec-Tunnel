@@ -18,8 +18,8 @@ class BrandingTests(unittest.TestCase):
                 result=prepare_text(source,{'channel':'@my_channel','tag':'@stale','text_placement':'footer'},out,1)
                 body=result.read_text(encoding='utf-8-sig')
                 self.assertIn(text.splitlines()[0],body);self.assertIn('hello@example.org',body)
-                self.assertNotIn('other',body);self.assertNotIn('عضویت',body);self.assertNotIn('stale',body)
-                self.assertEqual(body.count('@my_channel'),1);self.assertTrue(body.rstrip().endswith('@my_channel'))
+                self.assertNotIn('other',body);self.assertIn(text.splitlines()[2].split('https:')[0],body);self.assertNotIn('stale',body)
+                self.assertEqual(body.count('@my_channel'),4);self.assertTrue(body.rstrip().endswith('@my_channel'))
                 self.assertNotIn('@other',result.name);self.assertIn('@my_channel',result.name)
                 self.assertEqual(source.read_bytes(),before)
 
@@ -29,7 +29,7 @@ class BrandingTests(unittest.TestCase):
             p.write_text('x'*65532+' https://t.me/other '+('y'*200000),encoding='utf-8')
             result=prepare_text(p,{'channel':'@my_channel'},out,1).read_text(encoding='utf-8-sig')
             self.assertNotIn('t.me',result);self.assertEqual(result.count('x'),65532)
-            self.assertEqual(result.count('y'),200000+1) # my_channel
+            self.assertEqual(result.count('y'),200000+2) # my_channel
 
     def test_stat_fingerprint_does_not_read_file_bytes(self):
         with tempfile.TemporaryDirectory() as d:

@@ -9,7 +9,7 @@ import time
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo,ZoneInfoNotFoundError
 
-from content import KINDS,ContentError,analyze,fallback,caption,detect_kind,fingerprint,prepare,protected_content,thumbnail,validate_caption_template
+from content import companion_files,companion_owner,KINDS,ContentError,analyze,fallback,caption,detect_kind,fingerprint,prepare,protected_content,thumbnail,validate_caption_template
 from ai_client import check_openai,validate_key
 from mtproto_client import MTProto,TelegramError,account_label,normalize_api_hash,normalize_api_id,normalize_phone
 from storage import DEFAULTS,atomic_write
@@ -236,8 +236,9 @@ class Engine:
 
     def _assign(self,db,config,now):
         occupied=[r[0] for r in db.execute("SELECT COALESCE(sent,scheduled) FROM jobs WHERE status IN ('scheduled','sent','preparing','sending','uncertain') AND COALESCE(sent,scheduled) IS NOT NULL")]
-        rows=db.execute("SELECT id FROM jobs WHERE status='draft' AND error='' AND title<>'' ORDER BY id").fetchall()
+        rows=db.execute("SELECT id,path FROM jobs WHERE status='draft' AND error='' AND title<>'' ORDER BY id").fetchall()
         for row in rows:
+            if companion_owner(Path(row['path'])): continue
             slot=next_slot(config,now,occupied);occupied.append(slot)
             db.execute("UPDATE jobs SET status='scheduled',scheduled=?,channel=?,updated=? WHERE id=?",(slot,config['channel'],now,row[0]))
         return len(rows)
@@ -295,6 +296,7 @@ class Engine:
         else:
             source=folder.rglob('*') if config['recursive'] else folder.iterdir()
             paths=sorted((p for p in source if p.is_file() and not p.is_symlink() and not p.name.endswith('.caption.txt') and not p.resolve().is_relative_to(self.store.directory.resolve()) and not any(part in ('.venv','.git') for part in p.parts)),key=lambda p:p.name.lower())
+        paths=[p for p in paths if companion_owner(p) is None]
         self.runtime['total']=len(paths);added=0;checked=0;processed=set();ai_unavailable=False
         for index,path in enumerate(paths):
             identifier=only_id
@@ -439,11 +441,21 @@ class Engine:
                 db.execute('UPDATE jobs SET channel=?,scheduled=? WHERE id=?',(config['channel'],now,immediate))
                 row=db.execute('SELECT * FROM jobs WHERE id=?',(immediate,)).fetchone()
             if not row: return False
+            if companion_owner(Path(row['path'])):
+                db.execute("UPDATE jobs SET status='excluded',scheduled=NULL WHERE id=?",(row['id'],))
+                return False
             job=dict(row);db.execute("UPDATE jobs SET status='preparing',updated=? WHERE id=?",(now,job['id']))
         self.runtime['sending']=True
         try:
+            current_digest=hashlib.sha256((str(Path(job['path']).resolve())+'\0'+fingerprint(job['path'])).encode()).hexdigest()
+            if current_digest!=job['digest']: raise ContentError('file_changed')
             path,kind=prepare(job,config,self.store.directory/'prepared')
-            job['cover_path']=str(self.build_cover(job,self.clock())[0])
+            job['cover_path']=str(self.build_cover(job,self.clock())[0]) if kind!='video' else None
+            job['companions']=[]
+            for companion in companion_files(Path(job['path'])):
+                attached={**job,'path':str(companion),'kind':detect_kind(companion)}
+                attached_path,attached_kind=prepare(attached,config,self.store.directory/'prepared')
+                job['companions'].append(str(attached_path))
             with self.lock:
                 if (immediate is None and not self.store.settings()['enabled']) or self.stop_event.is_set() or revision!=self.revision:
                     with self.store.db() as db: db.execute("UPDATE jobs SET status='draft',scheduled=NULL WHERE id=?",(job['id'],))
