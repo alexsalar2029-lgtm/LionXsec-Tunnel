@@ -5,7 +5,7 @@
 برنامهٔ فارسی آماده‌سازی محتوا و زمان‌بندی انتشار در تلگرام در پوشهٔ [`publisher`](publisher) قرار دارد.
 
 - [راهنمای نصب و اجرای Windows Server 2016](publisher/WINDOWS-SERVER-2016_FA.md)
-- [دریافت نسخهٔ ۱.۵.۴؛ زمان‌بندی دلخواه، جایگزینی لینک و فایل همراه ویدیو](downloads/LIONXSEC-Publisher-Desktop-v1.5.4.zip)
+- [دریافت نسخهٔ ۱.۵.۵؛ زمان‌بندی دلخواه، جایگزینی لینک و فایل همراه ویدیو](downloads/LIONXSEC-Publisher-Desktop-v1.5.5.zip)
 - [راهنمای OpenAI، پاک‌کردن نتیجه و رفع مشکل TXT](publisher/OPENAI-AND-RESCAN_FA.md)
 - [راهنمای کامل برنامه](publisher/README_FA.md)
 - [آزمون‌ها و محدودیت‌های بررسی‌شده](publisher/VALIDATION.md)

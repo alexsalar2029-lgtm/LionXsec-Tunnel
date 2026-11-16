@@ -97,7 +97,18 @@ with tempfile.TemporaryDirectory() as temp:
             assert 'sk-native-fixture' not in json.dumps(api.snapshot())
             window.evaluate_js("pywebview.api.clear_openai_key().then(()=>refresh())")
             wait('!state.settings.openai_key_set')
-            result.update(ok=True,renderer=backend.renderer,checks=['native startup','real JS bridge','folder scanning','SVB document accepted','caption edit','prepared TXT','time slots','simulated account send','pause','account card state','Persian time input','custom template persistence','clear and rescan preserving sent history','private OpenAI key bridge'])
+            # Regression: start must save count/window without the generate/save buttons.
+            window.evaluate_js("document.getElementById('daily-count').value='20';document.getElementById('daily-start').value='18:00';document.getElementById('daily-end').value='00:00';document.getElementById('toggle-run').click()")
+            wait("state.settings.enabled && state.settings.times.length===20")
+            slots=store.settings()['times']
+            assert len(set(slots))==20 and slots[0]=='18:00' and slots[-1]=='23:59',slots
+            assert Store(root/'data').settings()['times']==slots
+            window.evaluate_js("document.getElementById('toggle-run').click()")
+            wait("!state.settings.enabled && !document.getElementById('toggle-run').disabled")
+            window.evaluate_js("document.getElementById('daily-start').value='06:00';document.querySelector('#settings-form button[type=submit]').click()")
+            wait("state.settings.times.length===20 && state.settings.times[0]==='06:00'")
+            assert store.settings()['times'][-1]=='23:59'
+            result.update(ok=True,renderer=backend.renderer,checks=['native startup','real JS bridge','folder scanning','SVB document accepted','caption edit','prepared TXT','time slots','simulated account send','pause','account card state','Persian time input','custom template persistence','clear and rescan preserving sent history','private OpenAI key bridge','20 slots on direct start','midnight boundary','schedule persistence','06:00 window save'])
         except Exception: result.update(ok=False,error=traceback.format_exc())
         finally: window.destroy()
     webview.start(exercise,gui=desktop_gui(),http_server=True,private_mode=True,storage_path=str(root/'webview'))
