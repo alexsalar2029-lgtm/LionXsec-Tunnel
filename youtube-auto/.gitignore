@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.runtime/
+dist/
+yt_config.json
+client_secret*.json
+authorization.json
+*.session*
+*.log
+.uploading/
+chrome_session/
+videos/*
+!videos/.keep
+covers/*
+!covers/.keep

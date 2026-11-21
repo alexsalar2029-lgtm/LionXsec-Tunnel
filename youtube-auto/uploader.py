@@ -7,12 +7,15 @@ import uuid
 from pathlib import Path
 
 from google.auth.transport.requests import Request
+from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaIoBaseUpload
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+DEFAULT_STATE = Path.home() / ".youtube-auto"
+DEFAULT_TOKEN = DEFAULT_STATE / "authorization.json"
 EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".mpeg", ".wmv", ".m4v"}
 
 
@@ -23,25 +26,51 @@ def save_token(path, creds):
     os.replace(tmp.name, path)
 
 
+class ConnectionRequired(RuntimeError):
+    """The channel owner must authorize the uploader."""
+
+
+def connect(client_json, token):
+    flow = InstalledAppFlow.from_client_secrets_file(str(client_json), SCOPES)
+    creds = flow.run_local_server(host="127.0.0.1", port=0, access_type="offline", prompt="consent")
+    if not creds.refresh_token:
+        raise ConnectionRequired("Google did not grant offline access.")
+    save_token(token, creds)
+
+
 def client(path):
-    creds = Credentials.from_authorized_user_file(str(path), SCOPES)
+    try:
+        creds = Credentials.from_authorized_user_file(str(path), SCOPES)
+    except (FileNotFoundError, ValueError) as error:
+        raise ConnectionRequired("Connect your YouTube channel with login_youtube.bat or the connect command.") from error
     if not creds.valid:
-        creds.refresh(Request())
+        try:
+            creds.refresh(Request())
+        except RefreshError as error:
+            if any(isinstance(arg, dict) and arg.get("error") == "invalid_grant" for arg in error.args):
+                raise ConnectionRequired("Google requires a new grant. Run login_youtube.bat or connect again.") from error
+            raise
         save_token(path, creds)
     return build("youtube", "v3", credentials=creds, cache_discovery=False)
 
 
-def upload(service, file):
-    title = file.stem.replace("<", "").replace(">", "").strip()[:100] or "Video"
-    request = service.videos().insert(
-        part="snippet,status",
-        body={"snippet": {"title": title}, "status": {"privacyStatus": "private"}},
-        media_body=MediaFileUpload(str(file), mimetype="application/octet-stream",
-                                   chunksize=8 * 1024 * 1024, resumable=True))
-    result = None
-    while result is None:
-        _, result = request.next_chunk(num_retries=4)
-    return result["id"]
+def upload(service, file, *, snippet=None, status=None, retries=4, before_chunk=None):
+    snippet = dict(snippet or {})
+    title = str(snippet.get("title") or file.stem)
+    snippet["title"] = title.replace("<", "").replace(">", "").strip()[:100] or "Video"
+    with file.open("rb") as stream:
+        media = MediaIoBaseUpload(stream, mimetype="application/octet-stream",
+                                  chunksize=8 * 1024 * 1024, resumable=True)
+        request = service.videos().insert(
+            part="snippet,status", media_body=media,
+            body={"snippet": snippet, "status": status or {"privacyStatus": "private"}},
+        )
+        result = None
+        while result is None:
+            if before_chunk:
+                before_chunk()
+            _, result = request.next_chunk(num_retries=retries)
+        return result["id"]
 
 
 def scan(root, service):
@@ -68,18 +97,14 @@ def scan(root, service):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--state", type=Path, default=Path.home() / ".youtube-auto")
+    parser.add_argument("--state", type=Path, default=DEFAULT_STATE)
     commands = parser.add_subparsers(dest="cmd", required=True)
     commands.add_parser("connect").add_argument("client_json")
     commands.add_parser("watch").add_argument("queue", type=Path)
     args = parser.parse_args()
     token = args.state / "authorization.json"
     if args.cmd == "connect":
-        flow = InstalledAppFlow.from_client_secrets_file(args.client_json, SCOPES)
-        creds = flow.run_local_server(port=0, access_type="offline", prompt="consent")
-        if not creds.refresh_token:
-            parser.exit(1, "Google did not grant offline access.\n")
-        save_token(token, creds)
+        connect(args.client_json, token)
         return
     if not token.is_file():
         parser.exit(1, "Connect this channel once before starting the worker.\n")
