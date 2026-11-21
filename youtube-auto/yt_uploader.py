@@ -22,6 +22,7 @@ from googleapiclient.http import MediaIoBaseUpload
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 import uploader
+import desktop_oauth
 
 try:
     import cv2
@@ -681,20 +682,33 @@ class UploaderEngine:
             self.service.close()
             self.service = None
 
-    def setup_login(self):
-        """Only this explicit setup action opens a browser for first-time consent."""
+    def _channel_service(self, *, authorize=False, choose_client=None, explicit_client=None):
         try:
-            with uploader.client(uploader.DEFAULT_TOKEN):
-                self.log("The saved YouTube connection is ready.", "SUCCESS")
+            return uploader.client(uploader.DEFAULT_TOKEN)
         except uploader.ConnectionRequired:
-            client_file = APP_DIR / self.config["oauth_client_file"]
-            if not client_file.is_file():
-                raise FileNotFoundError(
-                    "Select the Google Desktop OAuth client JSON in Settings, or place "
-                    "client_secret.json beside login_youtube.bat."
-                ) from None
-            uploader.connect(client_file, uploader.DEFAULT_TOKEN)
-            self.log("YouTube channel connected. Future uploads use the saved permission.", "SUCCESS")
+            if not authorize:
+                raise
+
+        if explicit_client is not None:
+            client_file = Path(explicit_client)
+        else:
+            try:
+                client_file = desktop_oauth.find_client(APP_DIR, self.config["oauth_client_file"])
+            except FileNotFoundError as error:
+                if choose_client is None:
+                    raise
+                self.log(str(error), "INFO")
+                chosen = choose_client()
+                if not chosen:
+                    raise uploader.ConnectionRequired("Channel setup cancelled. " + desktop_oauth.SETUP_HELP) from None
+                client_file = Path(chosen)
+        self._status("connecting")
+        uploader.connect(client_file, uploader.DEFAULT_TOKEN)
+        return uploader.client(uploader.DEFAULT_TOKEN)
+
+    def setup_login(self, *, choose_client=None, explicit_client=None):
+        with self._channel_service(authorize=True, choose_client=choose_client, explicit_client=explicit_client):
+            self.log("YouTube channel connected. Uploads use the saved permission.", "SUCCESS")
         self._status("logged_in")
 
     def _thumbnail(self, video, video_id, analysis):
@@ -767,7 +781,7 @@ class UploaderEngine:
             self.log(f"Video {video_id} is uploaded. Thumbnail failed ({type(error).__name__}).", "WARNING")
         return "uploaded"
 
-    def run(self, videos=None, skip_uploaded=True, limit=None):
+    def run(self, videos=None, skip_uploaded=True, limit=None, *, choose_client=None):
         self.stop_event.clear()
         self._pause_event.clear()
         self.is_running = True
@@ -781,7 +795,7 @@ class UploaderEngine:
                 pending = pending[:max(0, limit)]
             total = summary["total"] = len(pending)
             if total:
-                self.service = uploader.client(uploader.DEFAULT_TOKEN)
+                self.service = self._channel_service(authorize=choose_client is not None, choose_client=choose_client)
             for index, video in enumerate(pending, 1):
                 self._interruptible_sleep(0)
                 self._status("uploading", name=video.name, index=index, total=total)
@@ -942,11 +956,10 @@ def main(argv=None):
         cfg["video_folder"] = str(Path(args.folder).resolve())
     if args.visibility:
         cfg["visibility"] = args.visibility
-    if args.client_json:
-        cfg["oauth_client_file"] = str(Path(args.client_json).resolve())
     engine = UploaderEngine(cfg)
     if args.setup:
-        engine.setup_login()
+        picker = desktop_oauth.pick_client_file if sys.platform == "win32" else None
+        engine.setup_login(choose_client=picker, explicit_client=args.client_json)
         return 0
     if args.tg_login:
         import getpass

@@ -13,3 +13,4 @@ videos/*
 !videos/.keep
 covers/*
 !covers/.keep
+publisher_oauth_client.json

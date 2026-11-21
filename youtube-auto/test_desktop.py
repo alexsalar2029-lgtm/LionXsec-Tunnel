@@ -4,6 +4,7 @@ import os
 import tempfile
 import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,6 +14,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import HttpMockSequence
 from PIL import Image
 
+import desktop_oauth
 import make_uploader_package as packaging
 import telegram_downloader as telegram
 import uploader
@@ -147,6 +149,12 @@ class DesktopTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "nt" or os.environ.get("DISPLAY"), "requires a desktop display")
     def test_native_gui_download_actions(self):
         import yt_uploader_gui as gui
+        old_grant = uploader.DEFAULT_TOKEN.read_bytes()
+        uploader.DEFAULT_TOKEN.unlink()
+        self.enter_patch(desktop, "APP_DIR", self.root)
+        chosen = self.root / "Downloads" / "app.json"
+        picker = self.enter_patch(gui, "pick_client_file", MagicMock(return_value=str(chosen)))
+        self.connect.side_effect = lambda client_file, token: token.write_bytes(old_grant)
         app = gui.UploaderApp()
         self.addCleanup(app.destroy)
         for page in ("telegram", "settings", "schedule", "logs", "help", "queue"):
@@ -177,7 +185,8 @@ class DesktopTests(unittest.TestCase):
             self.assertEqual(self.log.read_text().splitlines(), filenames)
             self.assertTrue(app.rows[filename].status_lbl.cget("text").endswith("Uploaded"))
         self.assertEqual([r[1] for r in self.http.request_sequence], ["POST", "PUT", "POST"] * 2)
-        self.connect.assert_not_called()
+        picker.assert_called_once_with(parent=app)
+        self.connect.assert_called_once_with(chosen, uploader.DEFAULT_TOKEN)
 
     def test_zip_overlays_existing_installation(self):
         archive_dir = self.root / "dist"
@@ -205,6 +214,82 @@ class DesktopTests(unittest.TestCase):
         for name, data in original.items():
             self.assertEqual((previous / name).read_bytes(), data)
         self.assertEqual(desktop.load_config(previous / "yt_config.json")["video_folder"], str(previous / "videos"))
+
+
+class ConnectionSetupTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.token = self.root / "authorization.json"
+        for module, name, value in (
+            (desktop, "APP_DIR", self.root),
+            (desktop, "CONFIG_FILE", self.root / "yt_config.json"),
+            (uploader, "DEFAULT_TOKEN", self.token),
+        ):
+            change = patch.object(module, name, value)
+            change.start()
+            self.addCleanup(change.stop)
+        self.registration = {"installed": {
+            "client_id": "fixture.apps.googleusercontent.com", "client_secret": "fixture-desktop",
+            "extra_private_field": "must-not-be-in-package",
+        }}
+        self.creds = uploader.Credentials(
+            token="test-access", refresh_token="test-refresh", client_id=self.registration["installed"]["client_id"],
+            client_secret="fixture-desktop", token_uri="https://oauth2.googleapis.com/token",
+            scopes=uploader.SCOPES, expiry=datetime(2099, 1, 1),
+        )
+
+    def test_google_download_name_and_saved_grant(self):
+        path = self.root / "client_secret_fixture.apps.googleusercontent.com.json"
+        path.write_text(json.dumps(self.registration))
+        with patch.object(uploader.InstalledAppFlow, "run_local_server", return_value=self.creds) as browser:
+            self.assertEqual(desktop.main(["--setup"]), 0)
+            path.unlink()
+            self.assertEqual(desktop.main(["--setup"]), 0)
+        browser.assert_called_once()
+        self.assertTrue(self.token.is_file())
+
+    def test_wrong_file_cancel_and_unattended_run_preserve_queue(self):
+        path = self.root / "user.json"
+        path.write_text('{"type":"authorized_user","refresh_token":"fixture"}')
+        engine = desktop.UploaderEngine(desktop.load_config())
+        video = self.root / "clip.mp4"
+        video.write_bytes(b"fixture")
+        with patch.object(uploader.InstalledAppFlow, "run_local_server") as browser:
+            with self.assertRaisesRegex(ValueError, "Desktop app"):
+                engine.setup_login(explicit_client=path)
+            with self.assertRaisesRegex(uploader.ConnectionRequired, "cancelled"):
+                engine.setup_login(choose_client=lambda: "")
+            with self.assertRaises(uploader.ConnectionRequired):
+                engine.run([video])
+            browser.assert_not_called()
+        self.assertTrue(video.is_file())
+        self.assertFalse(self.token.exists())
+
+    def test_customer_zip_provisions_only_desktop_client(self):
+        original = self.root / "application.json"
+        original.write_text(json.dumps(self.registration))
+        output = self.root / "customer"
+        packaging.build(output, archive=True, desktop_client=original)
+        with ZipFile(output.with_suffix(".zip")) as z:
+            payload = json.loads(z.read(desktop_oauth.PUBLISHER_CLIENT))
+            self.assertEqual(set(payload), {"installed"})
+            self.assertNotIn("extra_private_field", payload["installed"])
+            self.assertNotIn("authorization.json", z.namelist())
+        with patch.object(desktop, "APP_DIR", output), patch.object(
+            uploader.InstalledAppFlow, "run_local_server", return_value=self.creds
+        ) as browser:
+            picker = MagicMock(side_effect=AssertionError("Customer should not need a JSON picker"))
+            desktop.UploaderEngine(desktop.load_config()).setup_login(choose_client=picker)
+            browser.assert_called_once()
+            picker.assert_not_called()
+
+    def test_ambiguous_files_require_selection(self):
+        for n in ("one", "two"):
+            (self.root / f"client_secret_{n}.json").write_text(json.dumps(self.registration))
+        with self.assertRaisesRegex(FileNotFoundError, "Several"):
+            desktop_oauth.find_client(self.root, "absent.json")
 
 
 if __name__ == "__main__":

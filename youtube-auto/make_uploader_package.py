@@ -1,15 +1,18 @@
 """Build a Windows distribution from application files, including on Linux."""
 import argparse
+import json
 import os
 import tempfile
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
+from desktop_oauth import PUBLISHER_CLIENT, read_client
+
 SOURCE = Path(__file__).resolve().parent
 FILES = (
     "run_gui.bat", "start_youtube_uploader.bat", "auto_run.bat", "login_youtube.bat",
     "install_telegram.bat", "yt_uploader.py", "yt_uploader_gui.py", "telegram_downloader.py",
-    "uploader.py", "requirements.txt", "requirements-oauth.txt", "requirements-uploader.txt",
+    "uploader.py", "desktop_oauth.py", "requirements.txt", "requirements-oauth.txt", "requirements-uploader.txt",
     "requirements-uploader-telegram.txt", "requirements-uploader-vision.txt",
     "yt_config.example.json", "videos/.keep", "covers/.keep", "make_uploader_package.ps1",
     "make_uploader_package.py", "README_DEPLOYMENT_FA.md", "README_FA.md",
@@ -17,7 +20,7 @@ FILES = (
 )
 
 
-def build(output, *, archive=False, clean=False):
+def build(output, *, archive=False, clean=False, desktop_client=None):
     output = output.resolve()
     if output == SOURCE or output in SOURCE.parents:
         raise ValueError("Choose a distribution directory separate from the application.")
@@ -25,6 +28,10 @@ def build(output, *, archive=False, clean=False):
     if not clean and any(output.iterdir()):
         raise FileExistsError("Output directory is populated. Choose a new one or use --clean.")
     payload = {}
+    if desktop_client is not None:
+        payload[PUBLISHER_CLIENT] = json.dumps(read_client(desktop_client), indent=2).encode("utf-8")
+    elif (output / PUBLISHER_CLIENT).exists():
+        raise ValueError("Choose a fresh output directory for a build without the publisher client.")
     for name in FILES:
         data = (SOURCE / name).read_bytes()
         if name.endswith((".bat", ".ps1")):
@@ -58,5 +65,6 @@ if __name__ == "__main__":
     parser.add_argument("--output-directory", type=Path, default=SOURCE / "dist" / "youtube-uploader")
     parser.add_argument("--zip", action="store_true")
     parser.add_argument("--clean", action="store_true", help="Replace the listed application files in an existing output directory")
+    parser.add_argument("--desktop-client", type=Path, help="Include the publisher's Google Desktop app registration in this customer build")
     args = parser.parse_args()
-    print(build(args.output_directory, archive=args.zip, clean=args.clean))
+    print(build(args.output_directory, archive=args.zip, clean=args.clean, desktop_client=args.desktop_client))

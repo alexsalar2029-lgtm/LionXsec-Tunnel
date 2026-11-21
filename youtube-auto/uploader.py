@@ -6,6 +6,8 @@ import time
 import uuid
 from pathlib import Path
 
+from desktop_oauth import read_client
+
 from google.auth.transport.requests import Request
 from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
@@ -31,7 +33,7 @@ class ConnectionRequired(RuntimeError):
 
 
 def connect(client_json, token):
-    flow = InstalledAppFlow.from_client_secrets_file(str(client_json), SCOPES)
+    flow = InstalledAppFlow.from_client_config(read_client(client_json), SCOPES, autogenerate_code_verifier=True)
     creds = flow.run_local_server(host="127.0.0.1", port=0, access_type="offline", prompt="consent")
     if not creds.refresh_token:
         raise ConnectionRequired("Google did not grant offline access.")
@@ -41,8 +43,15 @@ def connect(client_json, token):
 def client(path):
     try:
         creds = Credentials.from_authorized_user_file(str(path), SCOPES)
-    except (FileNotFoundError, ValueError) as error:
-        raise ConnectionRequired("Connect your YouTube channel with login_youtube.bat or the connect command.") from error
+    except FileNotFoundError as error:
+        raise ConnectionRequired(
+            f"First-time YouTube connection needed for this user. Expected a grant at {path}. "
+            "Click Connect YouTube or run login_youtube.bat under the account that runs the uploader."
+        ) from error
+    except ValueError as error:
+        raise ConnectionRequired(
+            f"The saved YouTube grant at {path} could not be read. Reconnect using login_youtube.bat."
+        ) from error
     if not creds.valid:
         try:
             creds.refresh(Request())

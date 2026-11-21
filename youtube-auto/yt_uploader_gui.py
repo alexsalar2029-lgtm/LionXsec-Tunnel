@@ -27,6 +27,7 @@ except ImportError:
 from PIL import Image
 
 import uploader
+from desktop_oauth import pick_client_file
 try:
     import telegram_downloader as tg_mod
 except Exception as _tg_e:   # import-safe even if the module/telethon is missing
@@ -381,7 +382,8 @@ class UploaderApp(ctk.CTk):
                                      command=self.start_dryrun)
         self.dry_btn.grid(row=0, column=4, padx=4, pady=12)
 
-        self.status_lbl = ctk.CTkLabel(act, text="Idle.", anchor="e",
+        initial = "Idle." if uploader.DEFAULT_TOKEN.is_file() else "Connect YouTube to authorize this channel."
+        self.status_lbl = ctk.CTkLabel(act, text=initial, anchor="e",
                                        font=ctk.CTkFont(size=13))
         self.status_lbl.grid(row=0, column=6, sticky="e", padx=14)
 
@@ -1064,15 +1066,6 @@ class UploaderApp(ctk.CTk):
             return
         self.cfg["video_folder"] = self.folder_entry.get().strip() or "videos"
         client_file = APP_DIR / self.settings_widgets["oauth_client_file"].get().strip()
-        if not uploader.DEFAULT_TOKEN.is_file() and not client_file.is_file():
-            chosen = filedialog.askopenfilename(title="Select your Google Desktop OAuth client JSON",
-                                                filetypes=[("Google OAuth client", "*.json")])
-            if not chosen:
-                return
-            client_file = Path(chosen)
-            entry = self.settings_widgets["oauth_client_file"]
-            entry.delete(0, "end")
-            entry.insert(0, str(client_file))
         self.cfg["oauth_client_file"] = str(client_file)
         save_config(self.cfg)
         eng = self._ensure_engine()
@@ -1082,7 +1075,7 @@ class UploaderApp(ctk.CTk):
 
         def worker():
             try:
-                eng.setup_login()
+                eng.setup_login(choose_client=self._choose_client)
             except Exception as e:
                 self.ui_queue.put(("log", f"Connection error: {e}", "ERROR"))
                 self.ui_queue.put(("status", "error", {"message": str(e)}))
@@ -1122,9 +1115,9 @@ class UploaderApp(ctk.CTk):
         if not messagebox.askyesno("Confirm upload", msg):
             return
 
-        self._launch_upload(videos)
+        self._launch_upload(videos, interactive=True)
 
-    def _launch_upload(self, videos, auto_close: bool = False):
+    def _launch_upload(self, videos, auto_close: bool = False, *, interactive=False):
         if self.worker and self.worker.is_alive():
             return
         self._auto_close = auto_close
@@ -1138,7 +1131,8 @@ class UploaderApp(ctk.CTk):
             try:
                 # skip_uploaded=True: the engine also refuses to re-post anything
                 # already in uploaded_videos.log, as a second safety net.
-                eng.run(videos=videos, skip_uploaded=True)
+                eng.run(videos=videos, skip_uploaded=True,
+                        choose_client=self._choose_client if interactive else None)
             except Exception as e:
                 self.ui_queue.put(("log", f"Run error: {e}", "ERROR"))
                 self.ui_queue.put(("status", "error", {"message": str(e)}))
@@ -1240,11 +1234,14 @@ class UploaderApp(ctk.CTk):
         except Exception:
             pass
 
-    def _ask_from_main(self, prompt, title="Telegram"):
+    def _choose_client(self):
+        return self._ask_from_main("Select the Google Desktop OAuth client JSON", "Connect YouTube", kind="choose_client")
+
+    def _ask_from_main(self, prompt, title="Telegram", *, kind="ask"):
         """Ask the user for a value on the main thread (safe to call from a worker)."""
         holder = {"value": None}
         ev = threading.Event()
-        self.ui_queue.put(("ask", prompt, title, holder, ev))
+        self.ui_queue.put((kind, prompt, title, holder, ev))
         ev.wait()
         return holder["value"]
 
@@ -1407,10 +1404,20 @@ class UploaderApp(ctk.CTk):
                     row = self.rows.get(item[1])
                     if row:
                         row.set_thumbnail(item[2])
-                elif kind == "ask":
+                elif kind in ("ask", "choose_client"):
                     _, prompt, title, holder, ev = item
                     try:
-                        holder["value"] = simpledialog.askstring(title, prompt, show="*", parent=self)
+                        if kind == "choose_client":
+                            chosen = pick_client_file(parent=self)
+                            if chosen:
+                                self.cfg["oauth_client_file"] = chosen
+                                entry = self.settings_widgets["oauth_client_file"]
+                                entry.delete(0, "end")
+                                entry.insert(0, chosen)
+                                save_config(self.cfg)
+                            holder["value"] = chosen
+                        else:
+                            holder["value"] = simpledialog.askstring(title, prompt, show="*", parent=self)
                     except Exception:
                         holder["value"] = None
                     ev.set()
@@ -1454,9 +1461,12 @@ class UploaderApp(ctk.CTk):
             row = self.rows.get(name)
             if row:
                 row.set_status("Uploading…", "uploading")
+        elif state == "connecting":
+            self.set_status("Authorize the channel in your browser…")
         elif state == "logged_in":
             self.set_status("YouTube channel connected.")
         elif state == "error":
+            self._auto_close = False
             self.set_status(info["message"])
         elif state in ("finished", "stopped"):
             summ = info.get("summary", {})
@@ -1467,7 +1477,6 @@ class UploaderApp(ctk.CTk):
     def _on_worker_done(self, mode):
         self._busy(False)
         if mode == "upload":
-            self.progress.set(1.0)
             self.refresh_queue()
             if self._auto_close:
                 self._auto_close = False
@@ -1498,7 +1507,7 @@ class UploaderApp(ctk.CTk):
                     self.ui_queue.put(
                         ("log", f"▶ Auto-uploading {len(vids)} freshly downloaded video(s)…", "SUCCESS"))
                     # let this worker fully finish before launching the upload worker
-                    self.after(500, lambda v=vids: self._launch_upload(v))
+                    self.after(500, lambda v=vids: self._launch_upload(v, interactive=True))
                 else:
                     self.ui_queue.put(("log", "Nothing new to upload (already on YouTube).", "WARNING"))
             else:
