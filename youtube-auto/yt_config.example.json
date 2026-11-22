@@ -7,7 +7,7 @@
   "title_template": "{title}",
   "description_template": "",
   "default_tags": "",
-  "visibility": "PRIVATE",
+  "visibility": "PUBLIC",
   "made_for_kids": false,
   "set_thumbnail": true,
   "auto_cover": true,

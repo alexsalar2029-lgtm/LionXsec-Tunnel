@@ -23,9 +23,13 @@ class WorkerTests(unittest.TestCase):
             service = MagicMock()
             uploader.scan(root, service)
             (root / "inbox/test.mp4").write_bytes(b"fixture")
+            (root / "inbox/test.txt").write_text("Walk by the lake\nA morning walk with the local club.")
             insert = service.videos.return_value.insert
             insert.return_value.next_chunk.side_effect = [(None, None), (None, {"id": "fixture-id"})]
             uploader.scan(root, service)
             uploader.scan(root, service)
             insert.assert_called_once()
+            body = insert.call_args.kwargs["body"]
+            self.assertEqual(body["status"]["privacyStatus"], "public")
+            self.assertEqual(body["snippet"]["description"], "A morning walk with the local club.")
             self.assertEqual(next(root.glob("done/*/youtube-id.txt")).read_text(), "fixture-id")

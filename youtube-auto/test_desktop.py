@@ -107,6 +107,29 @@ class DesktopTests(unittest.TestCase):
         self.telegram_client.download_media.assert_awaited_once()
         self.connect.assert_not_called()
 
+    def test_public_telegram_upload_preserves_caption_and_reports_private_result(self):
+        self.message.raw_text = "گردش کنار دریاچه\nگزارش برنامهٔ جمعه"
+        self.responses[1] = ({"status": "200"}, b'{"id":"fixture-id","status":{"privacyStatus":"private"}}')
+        cfg = json.loads(self.config.read_text())
+        del cfg["visibility"]  # Use the clean installation default.
+        self.config.write_text(json.dumps(cfg))
+        with patch.object(desktop, "log_message") as log:
+            self.assertEqual(desktop.main(["--tg-download", "--tg-upload"]), 0)
+        body = json.loads(self.http.request_sequence[0][2])
+        self.assertEqual(body["status"]["privacyStatus"], "public")
+        self.assertEqual(body["snippet"]["title"], self.message.raw_text.splitlines()[0])
+        self.assertEqual(body["snippet"]["description"], self.message.raw_text)
+        self.assertTrue(any("YouTube returned private" in str(call) for call in log.call_args_list))
+        self.assertEqual(self.log.read_text().splitlines(), [self.filename])
+
+    def test_public_recording_without_metadata_stays_pending(self):
+        video = self.videos / "rec_f2267e3b6ca59b74a92fac767c34153.mp4"
+        video.write_bytes(self.media)
+        self.assertEqual(desktop.main(["--auto", "--visibility", "PUBLIC"]), 1)
+        self.assertFalse(self.http.request_sequence)
+        self.assertFalse(self.log.exists())
+        self.assertFalse((self.root / ".uploading").exists())
+
     def test_incomplete_download_can_retry_and_never_enters_upload_queue(self):
         async def incomplete(msg, file, progress_callback):
             file.write(b"short")

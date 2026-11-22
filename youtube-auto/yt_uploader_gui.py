@@ -585,7 +585,7 @@ class UploaderApp(ctk.CTk):
         section("📤 Upload options")
         ctk.CTkLabel(page, text="Visibility", anchor="w").grid(row=r, column=0, sticky="w", padx=8, pady=6)
         vis = ctk.CTkOptionMenu(page, values=VISIBILITY_CHOICES)
-        vis.set(str(self.cfg.get("visibility", "PRIVATE")).upper())
+        vis.set(str(self.cfg.get("visibility", "PUBLIC")).upper())
         vis.grid(row=r, column=1, sticky="w", padx=8, pady=6)
         w["visibility"] = vis
         r += 1
@@ -1108,7 +1108,7 @@ class UploaderApp(ctk.CTk):
                 "so nothing will be re-uploaded.\n\nUse '↺ Reset upload log' if you really want to post them again.")
             return
         msg = (f"Upload {len(videos)} video(s) to your YouTube channel with visibility "
-               f"'{self.cfg.get('visibility', 'PRIVATE')}'?")
+               f"'{self.cfg.get('visibility', 'PUBLIC')}'?")
         if already:
             msg += f"\n\n({already} already-uploaded video(s) will be skipped.)"
         msg += "\n\nMake sure you are logged in to the correct account."

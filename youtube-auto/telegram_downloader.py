@@ -28,6 +28,8 @@ import os
 import re
 import sys
 import asyncio
+import json
+from pathlib import Path
 import tempfile
 
 # cp1256 (Persian Windows console) cannot encode the emoji/arrows used in logs.
@@ -142,6 +144,19 @@ def _msg_filename(msg) -> str:
     if f is not None and getattr(f, "name", None):
         return f.name
     return ""
+
+
+def _save_caption(dest, msg):
+    caption = (getattr(msg, "raw_text", "") or "").strip()
+    video = Path(dest)
+    if not caption or video.with_suffix(".txt").exists():
+        return
+    title = next(line.strip() for line in caption.splitlines() if line.strip())
+    try:
+        with video.with_suffix(".json").open("x", encoding="utf-8") as target:
+            json.dump({"title": title[:100], "description": caption}, target, ensure_ascii=False)
+    except FileExistsError:
+        pass  # Preserve edits made in the queue.
 
 
 def _out_ext(msg) -> str:
@@ -408,6 +423,7 @@ class TelegramDownloader:
                 dest = os.path.join(out_dir, name)
                 expected = _size_bytes(msg)
                 if os.path.isfile(dest) and expected and os.path.getsize(dest) == expected:
+                    _save_caption(dest, msg)
                     mark_downloaded(f"{media_slug}:{msg.id}")
                     saved.append(dest)
                     if progress:
@@ -434,6 +450,7 @@ class TelegramDownloader:
                         size = target.tell()
                     if not size or (expected and size != expected):
                         raise OSError("Incomplete Telegram download")
+                    _save_caption(dest, msg)
                     os.replace(partial, dest)
                     partial = None
                     mark_downloaded(f"{media_slug}:{msg.id}")

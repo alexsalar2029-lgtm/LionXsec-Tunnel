@@ -10,6 +10,7 @@ import math
 import mimetypes
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -226,9 +227,26 @@ def extract_video_ocr_text(video_path: Path, language="en") -> str:
         return ""
 
 
+def embedded_metadata(video):
+    probe = shutil.which("ffprobe")
+    if probe is None:
+        return {}
+    try:
+        run = subprocess.run(
+            [probe, "-v", "error", "-protocol_whitelist", "file", "-show_entries",
+             "format_tags=title,description,comment", "-of", "json", str(video.resolve())],
+            capture_output=True, timeout=8, check=True,
+        )
+        tags = json.loads(run.stdout).get("format", {}).get("tags", {})
+        return {key.lower(): value.strip() for key, value in tags.items() if isinstance(value, str)}
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {}
+
+
 def analyze_video(video_path, config, log=log_message):
     video = Path(video_path)
-    title = video.stem.replace("_", " ").strip() or "Video"
+    embedded = embedded_metadata(video)
+    title = embedded.get("title") or video.stem.replace("_", " ").strip() or "Video"
     language = config.get("title_language", "auto")
     ocr = ""
     if config.get("use_ai_ocr") and HAS_VISION_OCR:
@@ -237,6 +255,7 @@ def analyze_video(video_path, config, log=log_message):
     return {
         "filename": video.name, "title": title, "stem": video.stem,
         "year": str(time.localtime().tm_year), "ocr_text": ocr,
+        "description": embedded.get("description") or embedded.get("comment", ""),
         "telegram_channel": config.get("telegram_channel", ""),
         "telegram_owner": config.get("telegram_owner", ""),
     }
@@ -255,7 +274,7 @@ def render_template(template, fields, fallback, log):
 def template_metadata(video, config, log):
     fields = analyze_video(video, config, log)
     title = render_template(config.get("title_template") or "{title}", fields, fields["title"], log)
-    description = render_template(config.get("description_template", ""), fields, "", log)
+    description = render_template(config.get("description_template") or "{description}", fields, fields["description"], log)
     tags = [tag.strip() for tag in config.get("default_tags", "").split(",") if tag.strip()]
     return title or fields["title"], description, tags, fields
 
@@ -731,6 +750,7 @@ class UploaderEngine:
 
     def upload_one(self, video, skip_uploaded):
         title, desc, tags, analysis = generate_metadata_ex(video, self.config, self.log)
+        uploader.check_public_metadata(video, title, desc, self.config["visibility"])
         snippet = {"title": title, "description": desc, "categoryId": "22"}
         if tags:
             snippet["tags"] = tags
@@ -759,9 +779,9 @@ class UploaderEngine:
             video_id = uploader.upload(
                 self.service, video, snippet=snippet, status=status,
                 retries=max(0, int(self.config["max_retries"])),
-                before_chunk=lambda: self._interruptible_sleep(0),
+                log=self.log, before_chunk=lambda: self._interruptible_sleep(0),
             )
-        except StopRequested:
+        except (StopRequested, uploader.MetadataRequired):
             claim.unlink()
             raise
         except HttpError as error:
@@ -803,6 +823,9 @@ class UploaderEngine:
                     outcome = self.upload_one(video, skip_uploaded)
                 except StopRequested:
                     raise
+                except uploader.MetadataRequired as error:
+                    self.log(str(error), "ERROR")
+                    outcome = "failed"
                 except Exception as error:
                     self.log(f"{video.name}: {type(error).__name__}. Check the upload log "
                              "and YouTube Studio before retrying.", "ERROR")

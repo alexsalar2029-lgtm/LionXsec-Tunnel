@@ -1,6 +1,7 @@
 """Upload completed inbox files to one explicitly authorized YouTube channel."""
 import argparse
 import os
+import re
 import tempfile
 import time
 import uuid
@@ -63,30 +64,67 @@ def client(path):
     return build("youtube", "v3", credentials=creds, cache_discovery=False)
 
 
-def upload(service, file, *, snippet=None, status=None, retries=4, before_chunk=None):
+class MetadataRequired(ValueError):
+    pass
+
+
+def check_public_metadata(file, title, description, visibility):
+    if visibility.lower() != "public":
+        return
+    opaque = re.fullmatch(r"(?:rec[ _-]*)?[a-f0-9]{16,}|tg[_ ].+[_ ]\d+|rec[ _-]*\d+",
+                          str(title).strip(), re.IGNORECASE)
+    if opaque or not str(title or "").replace("<", "").replace(">", "").strip() or not str(description or "").strip():
+        raise MetadataRequired(f"{file.name}: add a descriptive title and description using Queue > Edit "
+                               "or a same-name .json/.txt file before public upload.")
+
+
+def upload(service, file, *, snippet=None, status=None, retries=4, before_chunk=None, log=None):
     snippet = dict(snippet or {})
     title = str(snippet.get("title") or file.stem)
     snippet["title"] = title.replace("<", "").replace(">", "").strip()[:100] or "Video"
+    status = status or {"privacyStatus": "public"}
+    if snippet.get("description"):
+        clean = snippet["description"].replace("<", "").replace(">", "").strip()
+        snippet["description"] = clean.encode("utf-8")[:5000].decode("utf-8", errors="ignore")
+    check_public_metadata(file, snippet["title"], snippet.get("description"), status["privacyStatus"])
     with file.open("rb") as stream:
         media = MediaIoBaseUpload(stream, mimetype="application/octet-stream",
                                   chunksize=8 * 1024 * 1024, resumable=True)
         request = service.videos().insert(
             part="snippet,status", media_body=media,
-            body={"snippet": snippet, "status": status or {"privacyStatus": "private"}},
+            body={"snippet": snippet, "status": status},
         )
         result = None
         while result is None:
             if before_chunk:
                 before_chunk()
             _, result = request.next_chunk(num_retries=retries)
+        actual = (result.get("status") or {}).get("privacyStatus")
+        report = log or (lambda message, level: print(message, flush=True))
+        requested = status["privacyStatus"]
+        if not actual:
+            report(f"{file.name}: requested {requested}. YouTube did not confirm visibility in its response.", "WARNING")
+        elif actual != requested:
+            report(f"{file.name}: requested {requested}, YouTube returned {actual}. Check YouTube Studio "
+                   "and your project's YouTube API audit status.", "WARNING")
+        else:
+            report(f"{file.name}: YouTube returned visibility {actual}.", "INFO")
         return result["id"]
 
 
-def scan(root, service):
+def scan(root, service, visibility="public"):
+    from yt_uploader import DEFAULT_CONFIG, generate_metadata
+
     inbox = root / "inbox"
     inbox.mkdir(parents=True, exist_ok=True)
     for file in sorted(inbox.iterdir()):
         if file.suffix.lower() not in EXTENSIONS or file.is_symlink() or not file.is_file():
+            continue
+        title, description, tags = generate_metadata(file, DEFAULT_CONFIG)
+        try:
+            check_public_metadata(file, title, description, visibility)
+        except MetadataRequired as error:
+            print(error, flush=True)
             continue
         job = root / "processing" / uuid.uuid4().hex
         job.mkdir(parents=True)
@@ -96,7 +134,14 @@ def scan(root, service):
             job.rmdir()
             continue
         # A crash or ambiguous API response leaves the job here for reconciliation.
-        video_id = upload(service, job / file.name)
+        for suffix in (".json", ".txt"):
+            companion = file.with_suffix(suffix)
+            if companion.is_file():
+                companion.rename(job / companion.name)
+        snippet = {"title": title, "description": description, "categoryId": "22"}
+        if tags:
+            snippet["tags"] = tags
+        video_id = upload(service, job / file.name, snippet=snippet, status={"privacyStatus": visibility})
         (job / "youtube-id.txt").write_text(video_id, encoding="utf-8")
         done = root / "done"
         done.mkdir(exist_ok=True)
@@ -109,7 +154,9 @@ def main():
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE)
     commands = parser.add_subparsers(dest="cmd", required=True)
     commands.add_parser("connect").add_argument("client_json")
-    commands.add_parser("watch").add_argument("queue", type=Path)
+    watch = commands.add_parser("watch")
+    watch.add_argument("queue", type=Path)
+    watch.add_argument("--visibility", choices=["public", "unlisted", "private"], default="public")
     args = parser.parse_args()
     token = args.state / "authorization.json"
     if args.cmd == "connect":
@@ -119,7 +166,7 @@ def main():
         parser.exit(1, "Connect this channel once before starting the worker.\n")
     service = client(token)
     while True:
-        scan(args.queue, service)
+        scan(args.queue, service, args.visibility)
         time.sleep(10)
 
 
