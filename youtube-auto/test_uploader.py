@@ -31,5 +31,7 @@ class WorkerTests(unittest.TestCase):
             insert.assert_called_once()
             body = insert.call_args.kwargs["body"]
             self.assertEqual(body["status"]["privacyStatus"], "public")
-            self.assertEqual(body["snippet"]["description"], "A morning walk with the local club.")
+            self.assertTrue(body["snippet"]["description"].startswith("A morning walk with the local club.\n"))
+            self.assertIn("https://t.me/link_Lion", body["snippet"]["description"])
+            self.assertIn("https://t.me/LionXSec", body["snippet"]["description"])
             self.assertEqual(next(root.glob("done/*/youtube-id.txt")).read_text(), "fixture-id")

@@ -606,7 +606,7 @@ class UploaderApp(ctk.CTk):
         switch_row("made_for_kids", "Mark videos as 'Made for kids'")
         switch_row("set_thumbnail", "Use companion image as custom thumbnail")
         switch_row("auto_cover", "Auto-generate a professional cover / thumbnail")
-        switch_row("use_ai_ocr", "Extract on-screen text for the {ocr_text} template field (WinOCR)")
+        switch_row("use_ai_ocr", "Read video frames for titles and descriptions (English and Persian)")
 
         section("YouTube connection")
         entry_row("oauth_client_file", "Desktop OAuth client JSON", "client_secret.json", browse=True)
@@ -728,7 +728,7 @@ class UploaderApp(ctk.CTk):
             "    Desktop OAuth client JSON if prompted. Uploads reuse the saved permission.\n\n"
             "3)  Review the queue. Tick the videos you want to upload. Use ✎ Edit to\n"
             "    fine-tune a video's title/description/tags, or regenerate to\n"
-            "    apply your templates. Optional WinOCR supplies the {ocr_text} field.\n\n"
+            "    apply your templates. Frame analysis reads English and Persian text.\n\n"
             "4)  Click ▶ Start. Watch progress in the bar and the Logs tab. You can\n"
             "    ⏸ Pause / ▶ Resume or ⏹ Stop at any time.\n\n"
             "5)  👁 Preview (dry-run) generates metadata for every video WITHOUT opening\n"
@@ -1349,8 +1349,11 @@ class UploaderApp(ctk.CTk):
             try:
                 results = eng.dry_run(videos=videos)
                 for r in results:
+                    if "held" in r:
+                        continue  # The engine already logged the reason for this file.
                     self.ui_queue.put(("log", f"── {r['file']}", "SUCCESS"))
                     self.ui_queue.put(("log", f"   title: {r['title']}", "INFO"))
+                    self.ui_queue.put(("log", r["description"], "INFO"))
                     self.ui_queue.put(("log", f"   tags : {', '.join(r['tags'])}", "INFO"))
             except Exception as e:
                 self.ui_queue.put(("log", f"Dry-run error: {e}", "ERROR"))
@@ -1453,6 +1456,10 @@ class UploaderApp(ctk.CTk):
             row = self.rows.get(name)
             if row:
                 row.set_status("Uploading…", "uploading")
+        elif state == "held":
+            row = self.rows.get(info["name"])
+            if row:
+                row.set_status("Waiting for content", "pending")
         elif state == "connecting":
             self.set_status("Authorize the channel in your browser…")
         elif state == "logged_in":
@@ -1463,7 +1470,7 @@ class UploaderApp(ctk.CTk):
         elif state in ("finished", "stopped"):
             summ = info.get("summary", {})
             if summ:
-                self.set_status(f"Done · uploaded {summ.get('uploaded',0)}, "
+                self.set_status(f"Done · uploaded {summ.get('uploaded',0)}, held {summ.get('held',0)}, "
                                 f"failed {summ.get('failed',0)}, skipped {summ.get('skipped',0)}")
 
     def _on_worker_done(self, mode):

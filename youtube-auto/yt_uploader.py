@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import hashlib
 import json
 import math
 import mimetypes
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -20,22 +18,13 @@ from pathlib import Path
 
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageStat
 
 import uploader
 import desktop_oauth
 
-try:
-    import cv2
-except ImportError:
-    cv2 = None
+import video_content
 
-try:
-    import winocr
-except ImportError:
-    winocr = None
-
-HAS_VISION_OCR = cv2 is not None and winocr is not None
 # Older Windows consoles may otherwise reject Persian text and Unicode status icons.
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -50,7 +39,7 @@ DEFAULT_VIDEO_DIR = "videos"
 VIDEO_EXTENSIONS = uploader.EXTENSIONS | {".flv", ".ts", ".3gp", ".mpg"}
 IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"]
 VISIBILITY_CHOICES = ["PRIVATE", "UNLISTED", "PUBLIC"]
-APP_VERSION = "5.0"
+APP_VERSION = "5.1"
 DEFAULT_CONFIG = json.loads((APP_DIR / "yt_config.example.json").read_text(encoding="utf-8"))
 
 class StopRequested(Exception):
@@ -81,6 +70,12 @@ def load_config(path=None):
         if not isinstance(saved, dict):
             raise ValueError(f"Expected an object in {path}")
         config.update({key: value for key, value in saved.items() if value is not None})
+        if "metadata_version" not in saved:
+            # Upgrade the old defaults in memory. A subsequent settings save records the version.
+            config["use_ai_ocr"] = True
+            for field in ("telegram_channel", "telegram_owner"):
+                if not str(config[field]).strip():
+                    config[field] = DEFAULT_CONFIG[field]
     else:
         if not save_config(config, path):
             raise OSError(f"Cannot create settings in {path.parent}")
@@ -136,23 +131,13 @@ def find_companion_image(video_path: Path):
 
 def generate_thumbnail_image(video_path: Path, size=(220, 124)):
     """Grab a representative middle frame and return a resized PIL.Image (or None)."""
-    if cv2 is None:
-        return None
     try:
-        cap = cv2.VideoCapture(str(video_path.resolve()))
-        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if total > 0:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, int(total * 0.5))
-        ret, frame = cap.read()
-        cap.release()
-        if not ret:
-            return None
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        img = Image.fromarray(rgb)
-        img.thumbnail(size, Image.LANCZOS)
-        return img
-    except Exception:
-        return None
+        for image in video_content.sample_frames(video_path, (0.5,)):
+            image.thumbnail(size, Image.Resampling.LANCZOS)
+            return image
+    except (OSError, ValueError, IndexError, video_content.av.FFmpegError):
+        pass
+    return None
 
 
 def save_companion_metadata(video_path: Path, title: str, description: str, tags) -> bool:
@@ -169,89 +154,6 @@ def save_companion_metadata(video_path: Path, title: str, description: str, tags
         return False
 
 
-# ---------------------------------------------------------------------------
-# Optional frame OCR
-# ---------------------------------------------------------------------------
-async def extract_text_from_video_async(video_path: Path, max_frames: int = 9, language="en") -> str:
-    """
-    Extract & aggregate OCR text from many keyframes with light preprocessing
-    (dark-frame skipping + upscaling) for markedly better recognition accuracy.
-    """
-    if not HAS_VISION_OCR:
-        return ""
-    try:
-        cap = cv2.VideoCapture(str(video_path.resolve()))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if total_frames <= 0:
-            cap.release()
-            return ""
-
-        # Spread sample points across the whole clip (avoid the very first/last frame).
-        positions = [(i + 1) / (max_frames + 1) for i in range(max_frames)]
-        extracted_texts = []
-        for pct in positions:
-            frame_idx = int(total_frames * pct)
-            cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, frame_idx))
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                continue
-            try:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                # Skip near-black / near-uniform frames that carry no readable text.
-                if float(gray.std()) < 12.0:
-                    continue
-                h, w = gray.shape[:2]
-                # Upscale small captures so WinOCR reads on-screen UI text reliably.
-                if w and w < 1600:
-                    scale = min(2.5, 1600.0 / float(w))
-                    frame = cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pil_img = Image.fromarray(rgb_frame)
-                res = await winocr.recognize_pil(pil_img, lang=language)
-                if res and res.text:
-                    extracted_texts.append(res.text)
-            except Exception:
-                continue
-        cap.release()
-        return "\n".join(extracted_texts)
-    except Exception as e:
-        log_message(f"Error during video OCR extraction: {e}", "WARNING")
-        return ""
-
-
-def extract_video_ocr_text(video_path: Path, language="en") -> str:
-    """Synchronous wrapper for video OCR extraction."""
-    try:
-        return asyncio.run(extract_text_from_video_async(video_path, language=language))
-    except Exception:
-        return ""
-
-
-def embedded_metadata(video):
-    probe = shutil.which("ffprobe")
-    if probe is None:
-        return {}
-    try:
-        run = subprocess.run(
-            [probe, "-v", "error", "-protocol_whitelist", "file", "-show_entries",
-             "format=duration:format_tags=title,description,comment:stream=width,height",
-             "-select_streams", "v:0", "-of", "json", str(video.resolve())],
-            capture_output=True, timeout=8, check=True,
-        )
-        info = json.loads(run.stdout)
-        fmt = info.get("format", {})
-        result = {k.lower(): v.strip() for k, v in fmt.get("tags", {}).items() if isinstance(v, str)}
-        stream = next(iter(info.get("streams", [])), {})
-        if stream.get("width") and stream.get("height"):
-            result["resolution"] = f"{stream['width']}×{stream['height']}"
-        if fmt.get("duration", "").replace(".", "", 1).isdigit():
-            minutes, seconds = divmod(round(float(fmt["duration"])), 60)
-            result["duration"] = f"{minutes}:{seconds:02d}"
-        return result
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return {}
-
-
 def public_telegram_url(value):
     match = re.fullmatch(r"(?:@|(?:https?://)?t\.me/)?([a-zA-Z][a-zA-Z0-9_]{2,31})/?", str(value or "").strip())
     if match and match[1].lower() not in {"joinchat", "share", "proxy", "socks", "login", "invite"}:
@@ -259,23 +161,43 @@ def public_telegram_url(value):
     return ""
 
 
-def analyze_video(video_path, config, log=log_message):
+def analyze_video(video_path, config, log=log_message, *, supplied_title="", supplied_description=""):
     video = Path(video_path)
-    embedded = embedded_metadata(video)
-    title = embedded.get("title") or video.stem.replace("_", " ").strip() or "Video"
+    embedded = video_content.metadata(video)
     language = config.get("title_language", "auto")
-    ocr = ""
-    if config.get("use_ai_ocr") and HAS_VISION_OCR:
-        log(f"Reading video text: {video.name}")
-        ocr = extract_video_ocr_text(video, "en" if language == "auto" else language)
+    title = next((v.strip() for v in (supplied_title, embedded.get("title"))
+                  if isinstance(v, str) and video_content.substantive(v)), "")
+    description = next((v.strip() for v in (supplied_description, embedded.get("description"), embedded.get("comment"))
+                        if isinstance(v, str) and video_content.substantive(v)), "")
+    if not title and description:
+        title = video_content.substantive(description)[0]
+    topics = []
+    ocr = []
+    if not title or not description:
+        topics = video_content.subtitle_topics(video)
+    wants_ocr_text = any("{ocr_text}" in str(config.get(k, "")) for k in ("title_template", "description_template"))
+    if config.get("use_ai_ocr", True) and (wants_ocr_text or (not topics and (not title or not description))):
+        log(f"Reading text from video frames: {video.name}")
+        ocr = video_content.screen_topics(video, language, log)
+    topics = topics or ocr
+    if not title and topics:
+        title = topics[0]
+    if title and not description:
+        extra = [line for line in topics if video_content.key(line) != video_content.key(title)]
+        if language == "en":
+            description = f'This video shows “{title}”.'
+            if extra:
+                description += "\n\nAlso in the video\n" + "\n".join("• " + line for line in extra)
+        else:
+            description = f"در این ویدیو «{title}» را می‌بینید."
+            if extra:
+                description += "\n\nدر بخش‌های دیگر ویدیو\n" + "\n".join("• " + line for line in extra)
     date = time.strftime("%Y-%m-%d %H:%M", time.localtime(video.stat().st_mtime))
     details = " · ".join(filter(None, [video.suffix[1:].upper(), embedded.get("duration"), embedded.get("resolution")]))
     return {
-        "date": date, "details": details,
-        "filename": video.name, "title": title, "stem": video.stem,
-        "year": str(time.localtime().tm_year), "ocr_text": ocr,
-        "description": embedded.get("description") or embedded.get("comment", ""),
-        "telegram_channel": public_telegram_url(config.get("telegram_channel") or config.get("tg_channel")),
+        "date": date, "details": details, "filename": video.name, "stem": video.stem,
+        "title": title, "description": description, "year": str(time.localtime().tm_year),
+        "ocr_text": "\n".join(ocr), "telegram_channel": public_telegram_url(config.get("telegram_channel")),
         "telegram_owner": public_telegram_url(config.get("telegram_owner")),
     }
 
@@ -288,14 +210,6 @@ def render_template(template, fields, fallback, log):
             "Using the default for this field.", "WARNING")
         return fallback
     return re.sub(r"\{(\w+)\}", lambda match: fields[match[1]], template).strip()
-
-
-def template_metadata(video, config, log):
-    fields = analyze_video(video, config, log)
-    title = render_template(config.get("title_template") or "{title}", fields, fields["title"], log)
-    description = render_template(config.get("description_template") or "{description}", fields, fields["description"], log)
-    tags = [tag.strip() for tag in config.get("default_tags", "").split(",") if tag.strip()]
-    return title or fields["title"], description, tags, fields
 
 
 _DEFAULT_ACCENTS = [
@@ -336,7 +250,9 @@ def _fit_cover_font(text, max_w, start, kind="black", min_size=44):
         if f is None or _text_w(f, text) <= max_w:
             return f
         size -= 4
-    return _cover_font(min_size, kind)
+    while size > 12 and _text_w(_cover_font(size, kind), text) > max_w:
+        size -= 2
+    return _cover_font(size, kind)
 
 
 def _cover_accent(analysis):
@@ -357,31 +273,16 @@ def _cover_crop(img, size):
 
 
 def _best_frame(video_path, size=(1280, 720)):
-    if cv2 is None:
-        return None
+    best, best_score = None, -1.0
     try:
-        cap = cv2.VideoCapture(str(Path(video_path).resolve()))
-        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if total <= 0:
-            cap.release()
-            return None
-        best, best_score = None, -1.0
-        for pct in [0.2, 0.35, 0.5, 0.65, 0.8]:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, int(total * pct))
-            ret, fr = cap.read()
-            if not ret or fr is None:
-                continue
-            g = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
-            mean = float(g.mean())
-            score = float(g.std()) * (1.0 if 35 < mean < 225 else 0.35)
+        for image in video_content.sample_frames(video_path, (0.2, 0.35, 0.5, 0.65, 0.8)):
+            stats = ImageStat.Stat(image.convert("L").resize((160, 90)))
+            score = stats.stddev[0] * (1.0 if 35 < stats.mean[0] < 225 else 0.35)
             if score > best_score:
-                best_score, best = score, fr
-        cap.release()
-        if best is None:
-            return None
-        return _cover_crop(Image.fromarray(cv2.cvtColor(best, cv2.COLOR_BGR2RGB)), size)
-    except Exception:
-        return None
+                best, best_score = image, score
+    except (OSError, ValueError, IndexError, video_content.av.FFmpegError):
+        pass
+    return _cover_crop(best, size) if best is not None else None
 
 
 COVER_STYLES = ["bold", "gaming", "minimal", "spotlight"]
@@ -389,7 +290,7 @@ COVER_STYLES = ["bold", "gaming", "minimal", "spotlight"]
 
 def _cover_bottom(draw, W, H, cfg, accent, margin=74):
     bf = _cover_font(38, "bold")
-    tg = public_telegram_url(cfg.get("telegram_channel") or cfg.get("tg_channel"))
+    tg = public_telegram_url(cfg.get("telegram_channel"))
     tg = tg.replace("https://t.me/", "@").replace("http://t.me/", "@").replace("https://", "").replace("http://", "")
     tri_y = H - 48
     draw.polygon([(margin, tri_y - 15), (margin, tri_y + 15), (margin + 26, tri_y)], fill=accent)
@@ -566,12 +467,17 @@ _COVER_BUILDERS = {
 }
 
 
+def _cover_stamp(title, channel, style):
+    contents = json.dumps([title, channel, style], ensure_ascii=False).encode()
+    return "YouTubeUploader/" + hashlib.sha256(contents).hexdigest()
+
+
 def generate_cover(video_path, config, analysis=None, out_dir=None, log=log_message, style=None):
     """Compose a professional 1280x720 YouTube cover. style: bold|gaming|minimal|spotlight."""
     video_path = Path(video_path)
     cfg = config or {}
     if analysis is None:
-        analysis = analyze_video(video_path, cfg, log)
+        _, _, _, analysis = generate_metadata_ex(video_path, cfg, log)
     accent = _cover_accent(analysis)
     style = (style or cfg.get("cover_style", "bold")).lower()
     builder = _COVER_BUILDERS.get(style, _cover_bold)
@@ -585,69 +491,81 @@ def generate_cover(video_path, config, analysis=None, out_dir=None, log=log_mess
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / (video_path.stem + ".jpg")
-    base.convert("RGB").save(out, "JPEG", quality=90)
+    exif = Image.Exif()
+    exif[305] = _cover_stamp(analysis["title"], cfg.get("telegram_channel"), style)
+    base.convert("RGB").save(out, "JPEG", quality=90, exif=exif)
     log(f"\U0001f3a8 Cover generated [{style}]: {out.name}")
     return str(out)
 
 
-def _read_metadata(video_path: Path, config: dict, log):
-    """Like generate_metadata but also returns the analysis dict (None for companion overrides)."""
-    video_path = Path(video_path)
-    companion_json = video_path.with_suffix(".json")
-    if companion_json.exists():
+def _read_companion(video, log):
+    path = video.with_suffix(".json")
+    if path.is_file():
         try:
-            with open(companion_json, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
             title = data.get("title", "")
             description = data.get("description", "")
             tags = data.get("tags", [])
             if isinstance(tags, str):
                 tags = [t.strip() for t in tags.split(",") if t.strip()]
+            # Earlier Telegram downloads wrote the original filename into a title-only JSON.
+            if video.stem.startswith("tg_") and not description and "tags" not in data:
+                title = ""
             if title or description:
-                log(f"Using metadata from companion file: {companion_json.name}")
-                return title, description, tags, None
-        except Exception as e:
-            log(f"Error reading companion JSON {companion_json.name}: {e}", "WARNING")
-
-    companion_txt = video_path.with_suffix(".txt")
-    if companion_txt.exists():
-        try:
-            with open(companion_txt, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-            if lines:
-                title = lines[0].strip()
-                description = "".join(lines[1:]).strip()
-                tags = [t.strip() for t in config.get("default_tags", "").split(",") if t.strip()]
-                log(f"Using metadata from companion file: {companion_txt.name}")
-                return title, description, tags, None
-        except Exception as e:
-            log(f"Error reading companion TXT {companion_txt.name}: {e}", "WARNING")
-
-    return template_metadata(video_path, config, log)
+                log(f"Using metadata from {path.name}")
+                return title, description, tags
+        except (OSError, ValueError, AttributeError) as error:
+            log(f"Could not read {path.name}: {error}", "WARNING")
+    path = video.with_suffix(".txt")
+    if path.is_file():
+        lines = path.read_text(encoding="utf-8-sig").splitlines()
+        if lines:
+            return lines[0], "\n".join(lines[1:]).strip(), None
+    return None
 
 
-def generate_metadata_ex(video_path, config, log=log_message):
+def audience_description(description, channel, owner):
+    invites = []
+    known = set()
+    for label, url in (("برای ویدیوهای بیشتر به کانال تلگرام ما بپیوندید", channel),
+                       ("برای ارتباط با ما در تلگرام", owner)):
+        if url and url.casefold() not in known:
+            invites.append((label, url))
+            known.add(url.casefold())
+    # Reserve enough UTF-8 bytes for both URLs before checking what survived truncation.
+    footer_size = sum(len(f"\n\n{label}\n{url}".encode()) for label, url in invites)
+    body = description.encode()[:5000 - footer_size].decode(errors="ignore").rstrip()
+    for label, url in invites:
+        handle = re.escape(url.rsplit("/", 1)[-1])
+        if not re.search(rf"(?<![\w/])(?:https?://t\.me/|@){handle}(?![\w/])", body, re.I):
+            body += f"\n\n{label}\n{url}"
+    return body
+
+
+def generate_metadata_ex(video_path, config, log=log_message, *, ignore_companion=False):
     video = Path(video_path)
-    title, description, tags, fields = _read_metadata(video, config, log)
-    fields = fields or analyze_video(video, config, log)
-    title = str(title or "").replace("<", "").replace(">", "").strip()
-    description = str(description or "").replace("<", "").replace(">", "").strip()
-    if not title or uploader.opaque_title(title):
-        source = description or fields["description"] or fields["ocr_text"]
-        title = next((line.strip() for line in source.splitlines() if line.strip()), "")
-        if not title or uploader.opaque_title(title):
-            title = "ویدیو | " + fields["date"]
-    title = title[:100]
-    if not description:
-        description = fields["description"] or f"{title}\nمشخصات ویدیو: {fields['details']}"
-    links = []
-    for value in (config.get("telegram_channel") or config.get("tg_channel"), config.get("telegram_owner")):
-        url = public_telegram_url(value)
-        if url and url.lower() not in description.lower() and url not in links:
-            links.append(url)
-    footer = "\n\nتلگرام: " + " · ".join(links) if links else ""
-    budget = 5000 - len(footer.encode())
-    description = description.encode()[:budget].decode(errors="ignore").rstrip() + footer
+    record = None if ignore_companion else _read_companion(video, log)
+    title, description, tags = record or ("", "", None)
+    fields = analyze_video(video, config, log, supplied_title=title, supplied_description=description)
+    if not fields["title"]:
+        raise uploader.MetadataRequired(
+            f"{video.name}: no descriptive caption, subtitle, embedded metadata or readable topic in the frames. "
+            "Kept in the queue before upload."
+        )
+    title, description = fields["title"], fields["description"]
+    if not record:
+        title = render_template(config.get("title_template") or "{title}", fields, title, log)
+        description = render_template(config.get("description_template") or "{description}", fields, description, log)
+    if tags is None:
+        tags = [tag.strip() for tag in config.get("default_tags", "").split(",") if tag.strip()]
+    title = title.replace("<", "").replace(">", "").strip()
+    if uploader.opaque_title(title):
+        title = fields["title"]
+    title = " ".join(title.split())[:100].rstrip()
+    description = description.replace("<", "").replace(">", "").strip()
+    if not video_content.substantive(description):
+        description = fields["description"]
+    description = audience_description(description, fields["telegram_channel"], fields["telegram_owner"])
     return title, description, tags, dict(fields, title=title)
 
 
@@ -655,6 +573,10 @@ def generate_metadata(video_path: Path, config: dict, log=log_message):
     """Read the sidecar override or render metadata using the saved templates."""
     title, description, tags, _ = generate_metadata_ex(video_path, config, log)
     return title, description, tags
+
+
+def template_metadata(video, config, log):
+    return generate_metadata_ex(video, config, log, ignore_companion=True)
 
 
 def upload_thumbnail(service, config, video, video_id, analysis, log=log_message):
@@ -665,7 +587,13 @@ def upload_thumbnail(service, config, video, video_id, analysis, log=log_message
         cover = Path(config["cover_dir"]) / (video.stem + ".jpg")
         if cover.is_file():
             image = cover
-        elif config.get("auto_cover"):
+            if config.get("auto_cover"):
+                with Image.open(cover) as previous:
+                    stamp = str(previous.getexif().get(305, ""))
+                expected = _cover_stamp(analysis["title"], config.get("telegram_channel"), config.get("cover_style", "bold").lower())
+                if stamp.startswith("YouTubeUploader/") and stamp != expected:
+                    image = None
+        if image is None and config.get("auto_cover"):
             image = generate_cover(video, config, analysis, log=log)
     if image:
         mime = mimetypes.guess_type(str(image))[0] or "application/octet-stream"
@@ -850,18 +778,19 @@ class UploaderEngine:
         self.stop_event.clear()
         self._pause_event.clear()
         self.is_running = True
-        summary = {"total": 0, "uploaded": 0, "failed": 0, "skipped": 0}
+        summary = {"total": 0, "uploaded": 0, "failed": 0, "skipped": 0, "held": 0}
         try:
             videos = list_videos(self.config["video_folder"]) if videos is None else list(map(Path, videos))
             done = load_uploaded_log() if skip_uploaded else set()
             pending = [video for video in videos if video.name not in done]
             summary["skipped"] = len(videos) - len(pending)
-            if limit is not None:
-                pending = pending[:max(0, limit)]
-            total = summary["total"] = len(pending)
+            total = len(pending) if limit is None else min(len(pending), max(0, limit))
+            summary["total"] = total
             if total:
                 self.service = self._channel_service(authorize=choose_client is not None, choose_client=choose_client)
             for index, video in enumerate(pending, 1):
+                if index > total:
+                    break
                 self._interruptible_sleep(0)
                 self._status("uploading", name=video.name, index=index, total=total)
                 try:
@@ -869,18 +798,23 @@ class UploaderEngine:
                 except StopRequested:
                     raise
                 except uploader.MetadataRequired as error:
-                    self.log(str(error), "ERROR")
-                    outcome = "failed"
+                    self.log(str(error), "WARNING")
+                    outcome = "held"
+                    total = min(len(pending), total + 1)
+                    summary["total"] = total
                 except Exception as error:
                     self.log(f"{video.name}: {type(error).__name__}. Check the upload log "
                              "and YouTube Studio before retrying.", "ERROR")
                     outcome = "failed"
                 summary[outcome] += 1
                 self._progress(index, total, video.name)
-                if index < total:
+                if outcome == "held":
+                    self._status("held", name=video.name)
+                if outcome == "uploaded" and index < total:
                     self._interruptible_sleep(int(self.config["upload_delay_seconds"]))
             self._status("finished", summary=summary)
-            self.log(f"Uploaded {summary['uploaded']}, skipped {summary['skipped']}, failed {summary['failed']}.")
+            self.log(f"Uploaded {summary['uploaded']}, held {summary['held']}, "
+                     f"skipped {summary['skipped']}, failed {summary['failed']}.")
         except StopRequested:
             self._status("stopped", summary=summary)
         finally:
@@ -901,8 +835,12 @@ class UploaderEngine:
             video = Path(video)
             self.log(f"[Dry-run] Generating metadata {idx}/{total}: {video.name}")
             self._status("uploading", index=idx, total=total, name=video.name)
-            title, description, tags = generate_metadata(video, self.config, self.log)
-            results.append({"file": video.name, "title": title, "description": description, "tags": tags})
+            try:
+                title, description, tags = generate_metadata(video, self.config, self.log)
+                results.append({"file": video.name, "title": title, "description": description, "tags": tags})
+            except uploader.MetadataRequired as error:
+                self.log(str(error), "WARNING")
+                results.append({"file": video.name, "held": str(error)})
             self._progress(idx, total, video.name)
         self.log("🏁 Dry-run complete.", "SUCCESS")
         self._status("finished", summary={"total": total})

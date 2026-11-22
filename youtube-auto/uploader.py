@@ -1,13 +1,13 @@
 """Upload completed inbox files to one explicitly authorized YouTube channel."""
 import argparse
 import os
-import re
 import tempfile
 import time
 import uuid
 from pathlib import Path
 
 from desktop_oauth import read_client
+from video_content import SUBTITLE_EXTENSIONS, opaque_title
 
 from google.auth.transport.requests import Request
 from google.auth.exceptions import RefreshError
@@ -68,10 +68,6 @@ class MetadataRequired(ValueError):
     pass
 
 
-def opaque_title(title):
-    return re.fullmatch(r"(?:rec[ _-]*)?[a-f0-9]{16,}|tg[_ ].+[_ ]\d+|rec[ _-]*\d+", title.strip(), re.IGNORECASE)
-
-
 def check_public_metadata(file, title, description, visibility):
     if visibility.lower() != "public":
         return
@@ -114,7 +110,7 @@ def upload(service, file, *, snippet=None, status=None, retries=4, before_chunk=
         return result["id"]
 
 
-def scan(root, service, visibility="public", config=None):
+def scan(root, service, visibility="public", config=None, held=None):
     from yt_uploader import DEFAULT_CONFIG, IMAGE_EXTENSIONS, generate_metadata_ex, upload_thumbnail
 
     if config is None:
@@ -125,12 +121,25 @@ def scan(root, service, visibility="public", config=None):
     for file in sorted(inbox.iterdir()):
         if file.suffix.lower() not in EXTENSIONS or file.is_symlink() or not file.is_file():
             continue
-        title, description, tags, fields = generate_metadata_ex(file, config)
         try:
+            companions = [file.with_suffix(ext) for ext in (".json", ".txt", *SUBTITLE_EXTENSIONS)]
+            if held is not None:
+                signature = [(p.stat().st_mtime_ns, p.stat().st_size) if p.exists() else None
+                             for p in (file, *companions)]
+                previous = held.get(file)
+                if previous and previous[0] == signature and time.monotonic() < previous[1]:
+                    continue
+            title, description, tags, fields = generate_metadata_ex(file, config)
             check_public_metadata(file, title, description, visibility)
+        except FileNotFoundError:
+            continue
         except MetadataRequired as error:
             print(error, flush=True)
+            if held is not None:
+                held[file] = (signature, time.monotonic() + 600)
             continue
+        if held is not None:
+            held.pop(file, None)
         job = root / "processing" / uuid.uuid4().hex
         job.mkdir(parents=True)
         try:
@@ -139,7 +148,7 @@ def scan(root, service, visibility="public", config=None):
             job.rmdir()
             continue
         # A crash or ambiguous API response leaves the job here for reconciliation.
-        for suffix in (".json", ".txt", *IMAGE_EXTENSIONS):
+        for suffix in (".json", ".txt", *SUBTITLE_EXTENSIONS, *IMAGE_EXTENSIONS):
             companion = file.with_suffix(suffix)
             if companion.is_file():
                 companion.rename(job / companion.name)
@@ -176,8 +185,9 @@ def main():
     service = client(token)
     from yt_uploader import load_config
     config = load_config()
+    held = {}
     while True:
-        scan(args.queue, service, args.visibility, config)
+        scan(args.queue, service, args.visibility, config, held)
         time.sleep(10)
 
 

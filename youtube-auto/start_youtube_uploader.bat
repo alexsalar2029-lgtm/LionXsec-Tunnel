@@ -13,8 +13,8 @@ if not exist "%PYTHON%" (
     if errorlevel 1 goto :failed
 )
 
-rem Also upgrades v4 installations which only had Selenium and the GUI.
-"%PYTHON%" -c "import tkinter, customtkinter, PIL, telethon, socks, googleapiclient.discovery, google_auth_oauthlib.flow" >nul 2>&1
+rem Check existing installations as well as new ones for frame decoding and OCR.
+"%PYTHON%" -c "import tkinter, customtkinter, PIL, telethon, socks, googleapiclient.discovery, google_auth_oauthlib.flow, av, tesserocr" >nul 2>&1
 if errorlevel 1 (
     call :install requirements-uploader.txt
     if errorlevel 1 goto :failed
@@ -51,7 +51,7 @@ exit /b 0
 :install_vision
 call :install requirements-uploader-vision.txt
 if errorlevel 1 goto :failed
-echo Optional components are ready.
+echo Video analysis is ready.
 exit /b 0
 
 :install
@@ -93,8 +93,8 @@ echo login_youtube.bat                      Connect YouTube once
 echo install_telegram.bat                   Install Telegram support in the app environment
 echo auto_run.bat                           Open and start the daily batch
 echo start_youtube_uploader.bat --dry-run   Preview metadata
-echo start_youtube_uploader.bat --vision    Add frame analysis and Windows OCR
-echo start_youtube_uploader.bat --install-all   Install optional components and exit
+echo start_youtube_uploader.bat --vision    Open the interface with local video analysis
+echo start_youtube_uploader.bat --install-all   Install all components and exit
 exit /b 0
 
 :failed

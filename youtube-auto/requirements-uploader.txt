@@ -1,4 +1,5 @@
 -r requirements-oauth.txt
 -r requirements-uploader-telegram.txt
+-r requirements-uploader-vision.txt
 customtkinter>=5.2,<6
 Pillow>=10,<12

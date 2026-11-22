@@ -12,7 +12,9 @@ SOURCE = Path(__file__).resolve().parent
 FILES = (
     "run_gui.bat", "start_youtube_uploader.bat", "auto_run.bat", "login_youtube.bat",
     "install_telegram.bat", "yt_uploader.py", "yt_uploader_gui.py", "telegram_downloader.py",
-    "uploader.py", "desktop_oauth.py", "requirements.txt", "requirements-oauth.txt", "requirements-uploader.txt",
+    "uploader.py", "desktop_oauth.py", "video_content.py", "tessdata/eng.traineddata",
+    "tessdata/fas.traineddata", "tessdata/LICENSE", "tessdata/NOTICE",
+    "requirements.txt", "requirements-oauth.txt", "requirements-uploader.txt",
     "requirements-uploader-telegram.txt", "requirements-uploader-vision.txt",
     "yt_config.example.json", "videos/.keep", "covers/.keep", "make_uploader_package.ps1",
     "make_uploader_package.py", "README_DEPLOYMENT_FA.md", "README_FA.md",

@@ -12,13 +12,35 @@ from zipfile import ZipFile
 
 from googleapiclient.discovery import build
 from googleapiclient.http import HttpMockSequence
-from PIL import Image
+import av
+from PIL import Image, ImageDraw, ImageFont
 
 import desktop_oauth
 import make_uploader_package as packaging
 import telegram_downloader as telegram
 import uploader
 import yt_uploader as desktop
+
+
+def write_recording(path, *, blank=False):
+    """Encode a real screen recording with an uninformative name and container title."""
+    with av.open(str(path), "w") as output:
+        output.metadata["title"] = "Screen Recording 2026-09-28 172608"
+        stream = output.add_stream("mpeg4", rate=4)
+        stream.width, stream.height, stream.pix_fmt = 880, 460, "yuv420p"
+        for index in range(24):
+            image = Image.new("RGB", (880, 460), (23, 26, 31))
+            if not blank:
+                draw = ImageDraw.Draw(image)
+                detail = "Mixing warm and cool colors" if index < 12 else "Layering transparent washes"
+                for y, text, size in ((10, "Download history   |   Google Chrome", 18),
+                                      (145, "Watercolor basics", 56), (251, detail, 31),
+                                      (342, "Ask anything", 18)):
+                    draw.text((100, y), text, fill="white", font=ImageFont.load_default(size=size))
+            for packet in stream.encode(av.VideoFrame.from_image(image)):
+                output.mux(packet)
+        for packet in stream.encode():
+            output.mux(packet)
 
 
 class DesktopTests(unittest.TestCase):
@@ -48,7 +70,7 @@ class DesktopTests(unittest.TestCase):
         }))
         self.media = b"video fixture"
         self.filename = "tg_demo_0000007.mp4"
-        message = SimpleNamespace(id=7, document=None, video=True, file=SimpleNamespace(
+        message = SimpleNamespace(id=7, raw_text="A morning walk by the lake", document=None, video=True, file=SimpleNamespace(
             size=len(self.media), name="clip.mp4", ext=".mp4"
         ))
         self.message = message
@@ -97,7 +119,11 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual([r[1] for r in requests], ["POST", "PUT", "POST"])
         body = json.loads(requests[0][2])
         self.assertEqual(body["snippet"]["title"], "Manual title")
-        self.assertEqual(body["snippet"]["description"], "Description\n\nتلگرام: https://t.me/demo")
+        description = body["snippet"]["description"]
+        self.assertTrue(description.startswith("Description\n"))
+        self.assertIn("https://t.me/link_Lion", description)
+        self.assertIn("https://t.me/LionXSec", description)
+        self.assertNotIn("https://t.me/demo", description)
         self.assertEqual(body["snippet"]["tags"], ["Demo"])
         self.assertEqual(body["status"], {"privacyStatus": "unlisted", "selfDeclaredMadeForKids": True})
         self.assertIn("videoId=fixture-id", requests[2][0])
@@ -118,23 +144,63 @@ class DesktopTests(unittest.TestCase):
         body = json.loads(self.http.request_sequence[0][2])
         self.assertEqual(body["status"]["privacyStatus"], "public")
         self.assertEqual(body["snippet"]["title"], self.message.raw_text.splitlines()[0])
-        self.assertEqual(body["snippet"]["description"], self.message.raw_text + "\n\nتلگرام: https://t.me/demo")
+        self.assertTrue(body["snippet"]["description"].startswith(self.message.raw_text + "\n"))
+        self.assertIn("به کانال تلگرام ما بپیوندید\nhttps://t.me/link_Lion", body["snippet"]["description"])
         self.assertTrue(any("YouTube returned private" in str(call) for call in log.call_args_list))
         self.assertEqual(self.log.read_text().splitlines(), [self.filename])
 
     def test_public_recording_generates_title_description_and_cover(self):
-        video = self.videos / "rec_f2267e3b6ca59b74a92fac767c34153.mp4"
-        video.write_bytes(self.media)
+        video = self.videos / "Screen Recording 2026-09-28 172608.mp4"
+        write_recording(video)
         cfg = json.loads(self.config.read_text())
-        cfg.update(auto_cover=True, telegram_channel="@my_channel")
+        # Existing v5.0 settings had these defaults, even after upgrading the ZIP.
+        cfg.update(auto_cover=True, use_ai_ocr=False, telegram_channel="", telegram_owner="")
         self.config.write_text(json.dumps(cfg))
         self.assertEqual(desktop.main(["--auto", "--visibility", "PUBLIC"]), 0)
         body = json.loads(self.http.request_sequence[0][2])
-        self.assertNotIn("f226", body["snippet"]["title"])
-        self.assertIn("MP4", body["snippet"]["description"])
-        self.assertIn("https://t.me/my_channel", body["snippet"]["description"])
+        self.assertEqual(body["status"]["privacyStatus"], "public")
+        self.assertEqual(body["snippet"]["title"], "Watercolor basics")
+        desc = body["snippet"]["description"]
+        for detail in ("Mixing warm and cool colors", "Layering transparent washes", "به کانال تلگرام ما بپیوندید",
+                       "https://t.me/link_Lion", "https://t.me/LionXSec"):
+            self.assertIn(detail, desc)
+        for generic in ("Screen Recording", "MP4", "Download history", "Ask anything"):
+            self.assertNotIn(generic, desc)
         self.assertIn("videoId=fixture-id", self.http.request_sequence[2][0])
-        self.assertTrue((self.root / "covers" / (video.stem + ".jpg")).is_file())
+        with Image.open(self.root / "covers" / (video.stem + ".jpg")) as cover:
+            self.assertEqual(cover.size, (1280, 720))
+            self.assertTrue(cover.getexif()[305].startswith("YouTubeUploader/"))
+
+    def test_held_recording_does_not_spend_public_batch_slot(self):
+        video = self.videos / "Screen Recording 2026-09-28 172608.mp4"
+        write_recording(video, blank=True)
+        # Old sidecars contained the same placeholder as the YouTube Studio report.
+        video.with_suffix(".json").write_text(json.dumps({
+            "title": video.stem, "description": video.stem + "\nمشخصات ویدیو: MP4"}))
+        next_video = self.videos / "tg_demo_0000007.mp4"
+        next_video.write_bytes(self.media)
+        next_video.with_suffix(".vtt").write_text("WEBVTT\n\n00:00:00.000 --> 00:00:04.000\nPlanting spring bulbs\n")
+        self.assertEqual(desktop.main(["--auto", "--count", "1", "--visibility", "PUBLIC"]), 0)
+        self.assertEqual(self.log.read_text().splitlines(), [next_video.name])
+        self.assertEqual(json.loads(self.http.request_sequence[0][2])["snippet"]["title"], "Planting spring bulbs")
+        self.assertEqual(list((self.root / ".uploading").iterdir()), [])
+
+    def test_telegram_links_fit_description_limit_and_respect_saved_choices(self):
+        cfg = desktop.load_config(self.config)
+        cfg.update(telegram_owner="", telegram_channel="@demo_channel", use_ai_ocr=False)
+        desktop.save_config(cfg, self.config)
+        cfg = desktop.load_config(self.config)
+        self.assertFalse(cfg["use_ai_ocr"])
+        self.assertEqual(cfg["telegram_owner"], "")
+        video = self.videos / "presentation.mp4"
+        video.write_bytes(self.media)
+        url = "https://t.me/demo_channel"
+        for description in ("توضیحات\n" + url, "گل " * 1200 + url):
+            desktop.save_companion_metadata(video, "نمایش گل‌ها", description, [])
+            text = desktop.generate_metadata(video, cfg)[1]
+            self.assertEqual(text.count(url), 1)
+            self.assertNotIn("LionXSec", text)
+            self.assertLessEqual(len(text.encode()), 5000)
 
     def test_incomplete_download_can_retry_and_never_enters_upload_queue(self):
         async def incomplete(msg, file, progress_callback):
@@ -150,6 +216,7 @@ class DesktopTests(unittest.TestCase):
 
     def test_uncertain_upload_is_held_for_reconciliation(self):
         (self.videos / self.filename).write_bytes(self.media)
+        (self.videos / self.filename).with_suffix(".txt").write_text("Birds at the lake\nA short field recording.")
         with patch.object(uploader, "upload", side_effect=TimeoutError) as send:
             self.assertEqual(desktop.main(["--auto"]), 1)
             desktop.main(["--auto"])
