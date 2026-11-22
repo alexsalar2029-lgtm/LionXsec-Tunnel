@@ -234,13 +234,29 @@ def embedded_metadata(video):
     try:
         run = subprocess.run(
             [probe, "-v", "error", "-protocol_whitelist", "file", "-show_entries",
-             "format_tags=title,description,comment", "-of", "json", str(video.resolve())],
+             "format=duration:format_tags=title,description,comment:stream=width,height",
+             "-select_streams", "v:0", "-of", "json", str(video.resolve())],
             capture_output=True, timeout=8, check=True,
         )
-        tags = json.loads(run.stdout).get("format", {}).get("tags", {})
-        return {key.lower(): value.strip() for key, value in tags.items() if isinstance(value, str)}
+        info = json.loads(run.stdout)
+        fmt = info.get("format", {})
+        result = {k.lower(): v.strip() for k, v in fmt.get("tags", {}).items() if isinstance(v, str)}
+        stream = next(iter(info.get("streams", [])), {})
+        if stream.get("width") and stream.get("height"):
+            result["resolution"] = f"{stream['width']}×{stream['height']}"
+        if fmt.get("duration", "").replace(".", "", 1).isdigit():
+            minutes, seconds = divmod(round(float(fmt["duration"])), 60)
+            result["duration"] = f"{minutes}:{seconds:02d}"
+        return result
     except (OSError, ValueError, subprocess.SubprocessError):
         return {}
+
+
+def public_telegram_url(value):
+    match = re.fullmatch(r"(?:@|(?:https?://)?t\.me/)?([a-zA-Z][a-zA-Z0-9_]{2,31})/?", str(value or "").strip())
+    if match and match[1].lower() not in {"joinchat", "share", "proxy", "socks", "login", "invite"}:
+        return "https://t.me/" + match[1]
+    return ""
 
 
 def analyze_video(video_path, config, log=log_message):
@@ -252,12 +268,15 @@ def analyze_video(video_path, config, log=log_message):
     if config.get("use_ai_ocr") and HAS_VISION_OCR:
         log(f"Reading video text: {video.name}")
         ocr = extract_video_ocr_text(video, "en" if language == "auto" else language)
+    date = time.strftime("%Y-%m-%d %H:%M", time.localtime(video.stat().st_mtime))
+    details = " · ".join(filter(None, [video.suffix[1:].upper(), embedded.get("duration"), embedded.get("resolution")]))
     return {
+        "date": date, "details": details,
         "filename": video.name, "title": title, "stem": video.stem,
         "year": str(time.localtime().tm_year), "ocr_text": ocr,
         "description": embedded.get("description") or embedded.get("comment", ""),
-        "telegram_channel": config.get("telegram_channel", ""),
-        "telegram_owner": config.get("telegram_owner", ""),
+        "telegram_channel": public_telegram_url(config.get("telegram_channel") or config.get("tg_channel")),
+        "telegram_owner": public_telegram_url(config.get("telegram_owner")),
     }
 
 
@@ -370,7 +389,7 @@ COVER_STYLES = ["bold", "gaming", "minimal", "spotlight"]
 
 def _cover_bottom(draw, W, H, cfg, accent, margin=74):
     bf = _cover_font(38, "bold")
-    tg = str(cfg.get("telegram_channel", ""))
+    tg = public_telegram_url(cfg.get("telegram_channel") or cfg.get("tg_channel"))
     tg = tg.replace("https://t.me/", "@").replace("http://t.me/", "@").replace("https://", "").replace("http://", "")
     tri_y = H - 48
     draw.polygon([(margin, tri_y - 15), (margin, tri_y + 15), (margin + 26, tri_y)], fill=accent)
@@ -571,7 +590,7 @@ def generate_cover(video_path, config, analysis=None, out_dir=None, log=log_mess
     return str(out)
 
 
-def generate_metadata_ex(video_path: Path, config: dict, log=log_message):
+def _read_metadata(video_path: Path, config: dict, log):
     """Like generate_metadata but also returns the analysis dict (None for companion overrides)."""
     video_path = Path(video_path)
     companion_json = video_path.with_suffix(".json")
@@ -584,7 +603,7 @@ def generate_metadata_ex(video_path: Path, config: dict, log=log_message):
             tags = data.get("tags", [])
             if isinstance(tags, str):
                 tags = [t.strip() for t in tags.split(",") if t.strip()]
-            if title:
+            if title or description:
                 log(f"Using metadata from companion file: {companion_json.name}")
                 return title, description, tags, None
         except Exception as e:
@@ -607,10 +626,54 @@ def generate_metadata_ex(video_path: Path, config: dict, log=log_message):
     return template_metadata(video_path, config, log)
 
 
+def generate_metadata_ex(video_path, config, log=log_message):
+    video = Path(video_path)
+    title, description, tags, fields = _read_metadata(video, config, log)
+    fields = fields or analyze_video(video, config, log)
+    title = str(title or "").replace("<", "").replace(">", "").strip()
+    description = str(description or "").replace("<", "").replace(">", "").strip()
+    if not title or uploader.opaque_title(title):
+        source = description or fields["description"] or fields["ocr_text"]
+        title = next((line.strip() for line in source.splitlines() if line.strip()), "")
+        if not title or uploader.opaque_title(title):
+            title = "ویدیو | " + fields["date"]
+    title = title[:100]
+    if not description:
+        description = fields["description"] or f"{title}\nمشخصات ویدیو: {fields['details']}"
+    links = []
+    for value in (config.get("telegram_channel") or config.get("tg_channel"), config.get("telegram_owner")):
+        url = public_telegram_url(value)
+        if url and url.lower() not in description.lower() and url not in links:
+            links.append(url)
+    footer = "\n\nتلگرام: " + " · ".join(links) if links else ""
+    budget = 5000 - len(footer.encode())
+    description = description.encode()[:budget].decode(errors="ignore").rstrip() + footer
+    return title, description, tags, dict(fields, title=title)
+
+
 def generate_metadata(video_path: Path, config: dict, log=log_message):
     """Read the sidecar override or render metadata using the saved templates."""
     title, description, tags, _ = generate_metadata_ex(video_path, config, log)
     return title, description, tags
+
+
+def upload_thumbnail(service, config, video, video_id, analysis, log=log_message):
+    if not config.get("set_thumbnail"):
+        return
+    image = find_companion_image(video)
+    if image is None:
+        cover = Path(config["cover_dir"]) / (video.stem + ".jpg")
+        if cover.is_file():
+            image = cover
+        elif config.get("auto_cover"):
+            image = generate_cover(video, config, analysis, log=log)
+    if image:
+        mime = mimetypes.guess_type(str(image))[0] or "application/octet-stream"
+        with Path(image).open("rb") as stream:
+            media = MediaIoBaseUpload(stream, mimetype=mime)
+            service.thumbnails().set(videoId=video_id, media_body=media).execute(
+                num_retries=int(config["max_retries"])
+            )
 
 
 class UploaderEngine:
@@ -730,24 +793,6 @@ class UploaderEngine:
             self.log("YouTube channel connected. Uploads use the saved permission.", "SUCCESS")
         self._status("logged_in")
 
-    def _thumbnail(self, video, video_id, analysis):
-        if not self.config.get("set_thumbnail"):
-            return
-        image = find_companion_image(video)
-        if image is None:
-            cover = Path(self.config["cover_dir"]) / (video.stem + ".jpg")
-            if cover.is_file():
-                image = cover
-            elif self.config.get("auto_cover"):
-                image = generate_cover(video, self.config, analysis, log=self.log)
-        if image:
-            mime = mimetypes.guess_type(str(image))[0] or "application/octet-stream"
-            with Path(image).open("rb") as stream:
-                media = MediaIoBaseUpload(stream, mimetype=mime)
-                self.service.thumbnails().set(videoId=video_id, media_body=media).execute(
-                    num_retries=int(self.config["max_retries"])
-                )
-
     def upload_one(self, video, skip_uploaded):
         title, desc, tags, analysis = generate_metadata_ex(video, self.config, self.log)
         uploader.check_public_metadata(video, title, desc, self.config["visibility"])
@@ -796,7 +841,7 @@ class UploaderEngine:
         claim.unlink()
         self.log(f"Uploaded {video.name}: https://youtu.be/{video_id}", "SUCCESS")
         try:
-            self._thumbnail(video, video_id, analysis)
+            upload_thumbnail(self.service, self.config, video, video_id, analysis, self.log)
         except Exception as error:
             self.log(f"Video {video_id} is uploaded. Thumbnail failed ({type(error).__name__}).", "WARNING")
         return "uploaded"

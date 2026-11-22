@@ -149,9 +149,12 @@ def _msg_filename(msg) -> str:
 def _save_caption(dest, msg):
     caption = (getattr(msg, "raw_text", "") or "").strip()
     video = Path(dest)
-    if not caption or video.with_suffix(".txt").exists():
+    if video.with_suffix(".txt").exists():
         return
-    title = next(line.strip() for line in caption.splitlines() if line.strip())
+    original = Path(_msg_filename(msg).replace(chr(92), "/")).stem
+    title = next((line.strip() for line in caption.splitlines() if line.strip()), original)
+    if not title:
+        return
     try:
         with video.with_suffix(".json").open("x", encoding="utf-8") as target:
             json.dump({"title": title[:100], "description": caption}, target, ensure_ascii=False)

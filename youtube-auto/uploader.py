@@ -68,12 +68,14 @@ class MetadataRequired(ValueError):
     pass
 
 
+def opaque_title(title):
+    return re.fullmatch(r"(?:rec[ _-]*)?[a-f0-9]{16,}|tg[_ ].+[_ ]\d+|rec[ _-]*\d+", title.strip(), re.IGNORECASE)
+
+
 def check_public_metadata(file, title, description, visibility):
     if visibility.lower() != "public":
         return
-    opaque = re.fullmatch(r"(?:rec[ _-]*)?[a-f0-9]{16,}|tg[_ ].+[_ ]\d+|rec[ _-]*\d+",
-                          str(title).strip(), re.IGNORECASE)
-    if opaque or not str(title or "").replace("<", "").replace(">", "").strip() or not str(description or "").strip():
+    if opaque_title(str(title)) or not str(title or "").replace("<", "").replace(">", "").strip() or not str(description or "").strip():
         raise MetadataRequired(f"{file.name}: add a descriptive title and description using Queue > Edit "
                                "or a same-name .json/.txt file before public upload.")
 
@@ -112,15 +114,18 @@ def upload(service, file, *, snippet=None, status=None, retries=4, before_chunk=
         return result["id"]
 
 
-def scan(root, service, visibility="public"):
-    from yt_uploader import DEFAULT_CONFIG, generate_metadata
+def scan(root, service, visibility="public", config=None):
+    from yt_uploader import DEFAULT_CONFIG, IMAGE_EXTENSIONS, generate_metadata_ex, upload_thumbnail
+
+    if config is None:
+        config = dict(DEFAULT_CONFIG, cover_dir=str(root / "covers"))
 
     inbox = root / "inbox"
     inbox.mkdir(parents=True, exist_ok=True)
     for file in sorted(inbox.iterdir()):
         if file.suffix.lower() not in EXTENSIONS or file.is_symlink() or not file.is_file():
             continue
-        title, description, tags = generate_metadata(file, DEFAULT_CONFIG)
+        title, description, tags, fields = generate_metadata_ex(file, config)
         try:
             check_public_metadata(file, title, description, visibility)
         except MetadataRequired as error:
@@ -134,7 +139,7 @@ def scan(root, service, visibility="public"):
             job.rmdir()
             continue
         # A crash or ambiguous API response leaves the job here for reconciliation.
-        for suffix in (".json", ".txt"):
+        for suffix in (".json", ".txt", *IMAGE_EXTENSIONS):
             companion = file.with_suffix(suffix)
             if companion.is_file():
                 companion.rename(job / companion.name)
@@ -143,6 +148,10 @@ def scan(root, service, visibility="public"):
             snippet["tags"] = tags
         video_id = upload(service, job / file.name, snippet=snippet, status={"privacyStatus": visibility})
         (job / "youtube-id.txt").write_text(video_id, encoding="utf-8")
+        try:
+            upload_thumbnail(service, config, job / file.name, video_id, fields)
+        except Exception as error:
+            print(f"Video {video_id} uploaded. Thumbnail failed ({type(error).__name__}).", flush=True)
         done = root / "done"
         done.mkdir(exist_ok=True)
         job.rename(done / job.name)
@@ -165,8 +174,10 @@ def main():
     if not token.is_file():
         parser.exit(1, "Connect this channel once before starting the worker.\n")
     service = client(token)
+    from yt_uploader import load_config
+    config = load_config()
     while True:
-        scan(args.queue, service, args.visibility)
+        scan(args.queue, service, args.visibility, config)
         time.sleep(10)
 
 

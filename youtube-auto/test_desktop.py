@@ -97,7 +97,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual([r[1] for r in requests], ["POST", "PUT", "POST"])
         body = json.loads(requests[0][2])
         self.assertEqual(body["snippet"]["title"], "Manual title")
-        self.assertEqual(body["snippet"]["description"], "Description")
+        self.assertEqual(body["snippet"]["description"], "Description\n\nتلگرام: https://t.me/demo")
         self.assertEqual(body["snippet"]["tags"], ["Demo"])
         self.assertEqual(body["status"], {"privacyStatus": "unlisted", "selfDeclaredMadeForKids": True})
         self.assertIn("videoId=fixture-id", requests[2][0])
@@ -118,17 +118,23 @@ class DesktopTests(unittest.TestCase):
         body = json.loads(self.http.request_sequence[0][2])
         self.assertEqual(body["status"]["privacyStatus"], "public")
         self.assertEqual(body["snippet"]["title"], self.message.raw_text.splitlines()[0])
-        self.assertEqual(body["snippet"]["description"], self.message.raw_text)
+        self.assertEqual(body["snippet"]["description"], self.message.raw_text + "\n\nتلگرام: https://t.me/demo")
         self.assertTrue(any("YouTube returned private" in str(call) for call in log.call_args_list))
         self.assertEqual(self.log.read_text().splitlines(), [self.filename])
 
-    def test_public_recording_without_metadata_stays_pending(self):
+    def test_public_recording_generates_title_description_and_cover(self):
         video = self.videos / "rec_f2267e3b6ca59b74a92fac767c34153.mp4"
         video.write_bytes(self.media)
-        self.assertEqual(desktop.main(["--auto", "--visibility", "PUBLIC"]), 1)
-        self.assertFalse(self.http.request_sequence)
-        self.assertFalse(self.log.exists())
-        self.assertFalse((self.root / ".uploading").exists())
+        cfg = json.loads(self.config.read_text())
+        cfg.update(auto_cover=True, telegram_channel="@my_channel")
+        self.config.write_text(json.dumps(cfg))
+        self.assertEqual(desktop.main(["--auto", "--visibility", "PUBLIC"]), 0)
+        body = json.loads(self.http.request_sequence[0][2])
+        self.assertNotIn("f226", body["snippet"]["title"])
+        self.assertIn("MP4", body["snippet"]["description"])
+        self.assertIn("https://t.me/my_channel", body["snippet"]["description"])
+        self.assertIn("videoId=fixture-id", self.http.request_sequence[2][0])
+        self.assertTrue((self.root / "covers" / (video.stem + ".jpg")).is_file())
 
     def test_incomplete_download_can_retry_and_never_enters_upload_queue(self):
         async def incomplete(msg, file, progress_callback):

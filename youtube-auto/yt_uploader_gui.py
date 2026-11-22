@@ -40,7 +40,7 @@ from yt_uploader import (
     template_metadata, VISIBILITY_CHOICES, APP_VERSION, APP_DIR,
     LOG_FILE,
     create_daily_task, delete_daily_task, daily_task_exists, TASK_NAME,
-    generate_cover, analyze_video,
+    generate_cover, generate_metadata_ex,
 )
 
 # ---------------------------------------------------------------------------
@@ -769,6 +769,7 @@ class UploaderApp(ctk.CTk):
 
     # --------------------------------------------------------- queue handling
     def refresh_queue(self):
+        self.start_btn.configure(text=f"▶ Upload · {self.cfg['visibility']}")
         for child in self.queue_scroll.winfo_children():
             child.destroy()
         self.rows.clear()
@@ -1100,21 +1101,12 @@ class UploaderApp(ctk.CTk):
         # Never re-upload videos already recorded in uploaded_videos.log.
         uploaded = load_uploaded_log()
         videos = [v for v in selected if v.name not in uploaded]
-        already = len(selected) - len(videos)
         if not videos:
             messagebox.showinfo(
                 "Already uploaded",
                 "All selected videos are already uploaded (recorded in uploaded_videos.log), "
                 "so nothing will be re-uploaded.\n\nUse '↺ Reset upload log' if you really want to post them again.")
             return
-        msg = (f"Upload {len(videos)} video(s) to your YouTube channel with visibility "
-               f"'{self.cfg.get('visibility', 'PUBLIC')}'?")
-        if already:
-            msg += f"\n\n({already} already-uploaded video(s) will be skipped.)"
-        msg += "\n\nMake sure you are logged in to the correct account."
-        if not messagebox.askyesno("Confirm upload", msg):
-            return
-
         self._launch_upload(videos, interactive=True)
 
     def _launch_upload(self, videos, auto_close: bool = False, *, interactive=False):
@@ -1183,7 +1175,7 @@ class UploaderApp(ctk.CTk):
                     if eng.stop_event.is_set():
                         break
                     try:
-                        a = analyze_video(v, self.cfg, log=lambda m, l="INFO": self.ui_queue.put(("log", m, l)))
+                        _, _, _, a = generate_metadata_ex(v, self.cfg, log=lambda m, l="INFO": self.ui_queue.put(("log", m, l)))
                         path = generate_cover(v, self.cfg, a,
                                               log=lambda m, l="INFO": self.ui_queue.put(("log", m, l)))
                         if path:
