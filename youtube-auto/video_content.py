@@ -1,6 +1,5 @@
 """Read local video frames, published subtitles and descriptive container tags."""
 import hashlib
-import html
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -16,7 +15,7 @@ SUBTITLE_EXTENSIONS = (".srt", ".vtt")
 _RECORDER = re.compile(
     r"(?:screen[ -]*(?:record(?:ing|er)?|capture|shot)|record(?:ing)?|rec|video|clip|capture|"
     r"vid|img|dsc|movie|untitled|bandicam|zoom|ضبط(?:\s*صفحه)?|ویدیو)"
-    r"(?:\s*(?:at|on|از|در))?(?:[\s\d.:()\[\]+-]|am|pm|mp4)*", re.I)
+    r"(?:\s*(?:at|on|از|در))?(?:[\s\d.:()\[\]+~-]|am|pm|mp4)*", re.I)
 _FORMATS = {"mp4", "mkv", "avi", "webm", "mov", "wmv", "m4v", "flv", "mpeg"}
 _PRIVATE_LINE = re.compile(
     r"(?:https?://|www\.|[\w.+-]+@[\w.-]+\.\w+|(?:^|\s)@[\w_]+|\b\d{7,}\b|"
@@ -38,6 +37,74 @@ def key(text):
     return " ".join(re.findall(r"[^\W_]+", text.casefold()))
 
 
+class MetadataRequired(ValueError):
+    """This file needs more evidence or a review before automatic publication."""
+
+
+def check_for_review(text, *, artwork=False):
+    words = key(text)
+    tool = re.search(r"\b(?:silver|sliver|open)\s*bullet\b", words)
+    indicators = re.search(r"\b(?:hits|cpm|combo|free|رایگان)\b", words)
+    if tool and (indicators or (artwork and not re.search(r"\b(?:defense|defence|prevention|mitigation|دفاع|پیشگیری)\b", words))):
+        raise MetadataRequired("Local review required for material promoting bulk account checks.")
+
+
+def subject_lines(text):
+    """Keep descriptive phrases, discarding recorder labels, greetings and promotional footers."""
+    phrases = []
+    for line in re.split(r"[\n!?؟]+|(?<=\w)\.(?:\s+|$)", str(text or "")):
+        if not substantive(line) or not re.sub(r"(?:#\w+|https?://\S+|@\w+)", "", line).strip(" |,،:-"):
+            continue
+        line = re.sub(r"https?://\S+|(?<!\w)@\w+|(?<!\w)#[\w\u200c]+", "", line).strip(" |,،:-")
+        label = key(line)
+        if (evidence_line(line) and len(label.split()) >= 2
+                and label not in {"thank you", "thanks for watching", "subscribe to the channel",
+                                  "welcome back", "hello everyone", "سلام دوستان", "ممنون از همراهی شما"}
+                and not re.match(r"^(?:join (?:our|my) |follow (?:us|me) |عضو کانال|لینک دانلود)", label)):
+            line = line[0].upper() + line[1:]
+            if line not in phrases:
+                phrases.append(line)
+    return phrases
+
+
+_STOPWORDS = set("""a an the this that these those we i my our his your how to in of for with and
+or on from by at as into is are was were be will can it its you they about video screen recording
+clip episode lesson tutorial today more other showing shows learn what when who then out
+در از با و به را این آن برای که یک یا تا هم روی ما شما من خود است های ها می شود
+ویدیو فیلم آموزش درباره بخش قسمت بیشتر امروز مشاهده""".split())
+
+
+def topic_tags(title, context, existing=()):
+    """Use a short set of actual topic phrases for both YouTube tags and visible hashtags."""
+    tags = []
+    seen = set()
+    for value in existing:
+        tag = str(value).strip().strip("#").strip()
+        if tag and key(tag) and key(tag) not in seen:
+            tags.append(tag[:60])
+            seen.add(key(tag))
+    phrases = [title, *context.splitlines()]
+    singles = []
+    for phrase in phrases:
+        words = re.findall(r"[^\W_]+(?:\u200c[^\W_]+)*", phrase)
+        keywords = [word for word in words if len(word) > 2 and word.casefold() not in _STOPWORDS
+                    and any(c.isalpha() for c in word)]
+        if not keywords:
+            continue
+        # Preserve phrasing for short subjects. Long sentences contribute individual terms.
+        if 1 < len(keywords) <= 4:
+            tag = " ".join(words[words.index(keywords[0]):len(words) - words[::-1].index(keywords[-1])])
+            if key(tag) not in seen:
+                tags.append(tag[:60])
+                seen.add(key(tag))
+        singles.extend(keywords)
+    for word in singles:
+        if key(word) not in seen:
+            tags.append(word)
+            seen.add(key(word))
+    return tags[:5]
+
+
 def opaque_title(value):
     text = str(value or "").strip()
     text = re.sub(r"\.(?:mp4|mkv|avi|mov|webm|m4v|wmv)$", "", text, flags=re.I)
@@ -55,7 +122,7 @@ def substantive(text):
             and not re.match(r"^(?:مشخصات ویدیو|video (?:details|format)|تلگرام|telegram)\s*[:：]", line.strip(), re.I)
             and not re.match(r"^(?:برای ویدیوهای بیشتر به کانال تلگرام|برای ارتباط با ما در تلگرام|"
                              r"(?:join|follow) (?:our |my )?telegram\b)", line.strip(), re.I)
-            and any(char.isalpha() for char in re.sub(r"(?:https?://\S+|@\w+)", "", line))]
+            and any(char.isalpha() for char in re.sub(r"(?:https?://\S+|@\w+|#[\w\u200c]+)", "", line))]
 
 
 def metadata(video):
@@ -98,30 +165,6 @@ def sample_frames(video, positions):
                     break
             if frame is not None:
                 yield frame.to_image()
-
-
-def subtitle_topics(video):
-    for suffix in SUBTITLE_EXTENSIONS:
-        path = video.with_suffix(suffix)
-        if not path.is_file():
-            continue
-        with path.open("rb") as source:
-            raw = source.read(256 * 1024)
-        encoding = "utf-16" if raw.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig"
-        topics = []
-        for cue in re.split(r"\n\s*\n", raw.decode(encoding, errors="replace").replace("\r", "")):
-            lines = cue.splitlines()
-            timing = next((i for i, s in enumerate(lines) if "-->" in s), None)
-            if timing is None:
-                continue
-            text = html.unescape(re.sub(r"<[^>]*>", "", " ".join(lines[timing + 1:]))).strip()
-            if evidence_line(text) and text not in topics:
-                topics.append(text)
-                if len(topics) == 4:
-                    break
-        if topics:
-            return topics
-    return []
 
 
 def evidence_line(text):
@@ -183,6 +226,32 @@ def _screen_lines(api, image):
     return lines
 
 
+def cover_topics(path, language):
+    """Read only matched original artwork. A generated title cannot corroborate itself."""
+    if path is None:
+        return []
+    try:
+        with Image.open(path) as image:
+            if str(image.getexif().get(305, "")).startswith("YouTubeUploader/") or min(image.size) < 80:
+                return []
+            langs = {"en": "eng", "fa": "fas+eng"}.get(language, "eng+fas")
+            with tesserocr.PyTessBaseAPI(path=str(MODEL_DIR), lang=langs, psm=tesserocr.PSM.SPARSE_TEXT) as api:
+                lines = _screen_lines(api, image.convert("RGB"))
+                api.SetImage(image.convert("RGB"))
+                full_text = api.GetUTF8Text()
+        check_for_review(full_text + "\n" + "\n".join(line.text for line in lines), artwork=True)
+        result = []
+        for line in sorted(lines, key=lambda s: s.height, reverse=True):
+            if (line.height >= 0.026 and line.confidence >= 82
+                    and not re.search(r"\b(?:config\s*\d*|hits|cpm|free|com)\b", line.text, re.I)):
+                result.extend(t for t in subject_lines(line.text) if t not in result)
+        return result[:3]
+    except MetadataRequired:
+        raise
+    except (OSError, ValueError, RuntimeError):
+        return []
+
+
 def screen_topics(video, language, log):
     observations = {}
     appearances = Counter()
@@ -196,6 +265,7 @@ def screen_topics(video, language, log):
                 if digest not in cached:
                     cached[digest] = _screen_lines(api, frame)
                 lines = cached[digest]
+                check_for_review("\n".join(line.text for line in lines))
                 labels = {key(line.text) for line in lines}
                 prompts = {key(line.text) for line in lines if line.central} & _CHAT_PROMPTS
                 if prompts and any("chatgpt" in label.split() for label in labels):
@@ -205,12 +275,15 @@ def screen_topics(video, language, log):
                     if not line.central or not evidence_line(line.text):
                         continue
                     label = key(line.text)
-                    if len(label.split()) < 2 and (line.height < 0.052 or line.confidence < 90):
+                    if (len([w for w in label.split() if any(c.isalpha() for c in w)]) < 2
+                            or re.fullmatch(r"(?:(?:\d+|config|free|hits|cpm|job|update|premium)\s*)+", label)):
                         continue
                     seen.add(label)
                     if label not in observations or observations[label].confidence < line.confidence:
                         observations[label] = line
                 appearances.update(seen)
+    except MetadataRequired:
+        raise
     except (OSError, ValueError, IndexError, RuntimeError, av.FFmpegError) as error:
         log(f"Frame analysis unavailable for {video.name} ({type(error).__name__}).", "WARNING")
 

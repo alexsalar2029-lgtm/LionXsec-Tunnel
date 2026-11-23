@@ -14,7 +14,7 @@ if not exist "%PYTHON%" (
 )
 
 rem Check existing installations as well as new ones for frame decoding and OCR.
-"%PYTHON%" -c "import tkinter, customtkinter, PIL, telethon, socks, googleapiclient.discovery, google_auth_oauthlib.flow, av, tesserocr" >nul 2>&1
+"%PYTHON%" -c "import tkinter, customtkinter, PIL, telethon, socks, qrcode, googleapiclient.discovery, google_auth_oauthlib.flow, av, tesserocr, cv2, numpy" >nul 2>&1
 if errorlevel 1 (
     call :install requirements-uploader.txt
     if errorlevel 1 goto :failed

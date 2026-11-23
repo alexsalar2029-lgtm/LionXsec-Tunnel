@@ -6,7 +6,7 @@ import argparse
 import hashlib
 import json
 import math
-import mimetypes
+import io
 import os
 import re
 import subprocess
@@ -18,12 +18,13 @@ from pathlib import Path
 
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageStat
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps, ImageStat
 
 import uploader
 import desktop_oauth
 
 import video_content
+import visual_subject
 
 # Older Windows consoles may otherwise reject Persian text and Unicode status icons.
 for _stream in (sys.stdout, sys.stderr):
@@ -39,7 +40,7 @@ DEFAULT_VIDEO_DIR = "videos"
 VIDEO_EXTENSIONS = uploader.EXTENSIONS | {".flv", ".ts", ".3gp", ".mpg"}
 IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"]
 VISIBILITY_CHOICES = ["PRIVATE", "UNLISTED", "PUBLIC"]
-APP_VERSION = "5.1"
+APP_VERSION = "5.2"
 DEFAULT_CONFIG = json.loads((APP_DIR / "yt_config.example.json").read_text(encoding="utf-8"))
 
 class StopRequested(Exception):
@@ -161,27 +162,34 @@ def public_telegram_url(value):
     return ""
 
 
-def analyze_video(video_path, config, log=log_message, *, supplied_title="", supplied_description=""):
+def analyze_video(video_path, config, log=log_message, *, supplied_title="", supplied_description="", manual=False):
     video = Path(video_path)
     embedded = video_content.metadata(video)
     language = config.get("title_language", "auto")
-    title = next((v.strip() for v in (supplied_title, embedded.get("title"))
-                  if isinstance(v, str) and video_content.substantive(v)), "")
-    description = next((v.strip() for v in (supplied_description, embedded.get("description"), embedded.get("comment"))
-                        if isinstance(v, str) and video_content.substantive(v)), "")
-    if not title and description:
-        title = video_content.substantive(description)[0]
-    topics = []
+    video_content.check_for_review("\n".join(str(v or "") for v in (
+        supplied_title, supplied_description, embedded.get("title"), embedded.get("description"), embedded.get("comment"))))
+    title = supplied_title.strip() if manual and isinstance(supplied_title, str) and video_content.substantive(supplied_title) else ""
+    source = "manual title"
+    cover = find_companion_image(video) or find_companion_image(Path(config.get("cover_dir") or "covers") / video.name)
+    artwork = video_content.cover_topics(cover, language)
     ocr = []
-    if not title or not description:
-        topics = video_content.subtitle_topics(video)
-    wants_ocr_text = any("{ocr_text}" in str(config.get(k, "")) for k in ("title_template", "description_template"))
-    if config.get("use_ai_ocr", True) and (wants_ocr_text or (not topics and (not title or not description))):
-        log(f"Reading text from video frames: {video.name}")
+    if config.get("use_ai_ocr", True):
         ocr = video_content.screen_topics(video, language, log)
-    topics = topics or ocr
+    topics = list(ocr)
     if not title and topics:
-        title = topics[0]
+        # A matched cover can corroborate a heading already seen in the video.
+        cover_keys = {video_content.key(t) for t in artwork}
+        title = next((t for t in topics if video_content.key(t) in cover_keys), topics[0])
+        source = "text in video frames"
+    if not title:
+        title = visual_subject.identify(video, language, log)
+        source = "recurring object in video frames"
+        if title:
+            topics = [title]
+    description = ""
+    if isinstance(supplied_description, str) and video_content.substantive(supplied_description):
+        if manual or (title and video_content.key(title) in video_content.key(supplied_description)):
+            description = supplied_description.strip()
     if title and not description:
         extra = [line for line in topics if video_content.key(line) != video_content.key(title)]
         if language == "en":
@@ -197,7 +205,8 @@ def analyze_video(video_path, config, log=log_message, *, supplied_title="", sup
     return {
         "date": date, "details": details, "filename": video.name, "stem": video.stem,
         "title": title, "description": description, "year": str(time.localtime().tm_year),
-        "ocr_text": "\n".join(ocr), "telegram_channel": public_telegram_url(config.get("telegram_channel")),
+        "source": source, "topics": "\n".join(topics), "ocr_text": "\n".join(ocr),
+        "telegram_channel": public_telegram_url(config.get("telegram_channel")),
         "telegram_owner": public_telegram_url(config.get("telegram_owner")),
     }
 
@@ -505,26 +514,27 @@ def _read_companion(video, log):
             data = json.loads(path.read_text(encoding="utf-8-sig"))
             title = data.get("title", "")
             description = data.get("description", "")
-            tags = data.get("tags", [])
+            tags = data.get("tags")
             if isinstance(tags, str):
                 tags = [t.strip() for t in tags.split(",") if t.strip()]
             # Earlier Telegram downloads wrote the original filename into a title-only JSON.
-            if video.stem.startswith("tg_") and not description and "tags" not in data:
+            manual = data.get("source") != "telegram_caption" and not (video.stem.startswith("tg_") and "tags" not in data)
+            if not manual:
                 title = ""
             if title or description:
                 log(f"Using metadata from {path.name}")
-                return title, description, tags
+                return title, description, tags, manual
         except (OSError, ValueError, AttributeError) as error:
             log(f"Could not read {path.name}: {error}", "WARNING")
     path = video.with_suffix(".txt")
     if path.is_file():
         lines = path.read_text(encoding="utf-8-sig").splitlines()
         if lines:
-            return lines[0], "\n".join(lines[1:]).strip(), None
+            return lines[0], "\n".join(lines[1:]).strip(), None, True
     return None
 
 
-def audience_description(description, channel, owner):
+def audience_description(description, channel, owner, tags=()):
     invites = []
     known = set()
     for label, url in (("برای ویدیوهای بیشتر به کانال تلگرام ما بپیوندید", channel),
@@ -534,38 +544,70 @@ def audience_description(description, channel, owner):
             known.add(url.casefold())
     # Reserve enough UTF-8 bytes for both URLs before checking what survived truncation.
     footer_size = sum(len(f"\n\n{label}\n{url}".encode()) for label, url in invites)
-    body = description.encode()[:5000 - footer_size].decode(errors="ignore").rstrip()
+    hashtags = []
+    for tag in tags:
+        words = re.findall(r"[^\W_]+(?:\u200c[^\W_]+)*", tag)
+        if words:
+            value = "#" + "_".join(words)
+            if value.casefold() not in {s.casefold() for s in hashtags}:
+                hashtags.append(value)
+            if len(hashtags) == 5:
+                break
+    hash_size = len(("\n\n" + " ".join(hashtags)).encode()) if hashtags else 0
+    body = description.encode()[:5000 - footer_size - hash_size].decode(errors="ignore").rstrip()
     for label, url in invites:
         handle = re.escape(url.rsplit("/", 1)[-1])
         if not re.search(rf"(?<![\w/])(?:https?://t\.me/|@){handle}(?![\w/])", body, re.I):
             body += f"\n\n{label}\n{url}"
+    existing = {s.casefold() for s in re.findall(r"#[\w\u200c]+", body)}
+    missing = [tag for tag in hashtags if tag.casefold() not in existing]
+    if missing:
+        body += "\n\n" + " ".join(missing)
     return body
 
 
 def generate_metadata_ex(video_path, config, log=log_message, *, ignore_companion=False):
     video = Path(video_path)
     record = None if ignore_companion else _read_companion(video, log)
-    title, description, tags = record or ("", "", None)
-    fields = analyze_video(video, config, log, supplied_title=title, supplied_description=description)
+    title, description, tags, manual = record or ("", "", None, False)
+    fields = analyze_video(video, config, log, supplied_title=title, supplied_description=description, manual=manual)
     if not fields["title"]:
         raise uploader.MetadataRequired(
-            f"{video.name}: no descriptive caption, subtitle, embedded metadata or readable topic in the frames. "
+            f"{video.name}: no readable visual heading or consistently identifiable subject in the video frames. "
             "Kept in the queue before upload."
         )
     title, description = fields["title"], fields["description"]
     if not record:
         title = render_template(config.get("title_template") or "{title}", fields, title, log)
         description = render_template(config.get("description_template") or "{description}", fields, description, log)
-    if tags is None:
-        tags = [tag.strip() for tag in config.get("default_tags", "").split(",") if tag.strip()]
     title = title.replace("<", "").replace(">", "").strip()
-    if uploader.opaque_title(title):
+    visual_words = set(video_content.key(fields["title"]).split())
+    if uploader.opaque_title(title) or (not manual and not visual_words.intersection(video_content.key(title).split())):
         title = fields["title"]
     title = " ".join(title.split())[:100].rstrip()
     description = description.replace("<", "").replace(">", "").strip()
     if not video_content.substantive(description):
         description = fields["description"]
-    description = audience_description(description, fields["telegram_channel"], fields["telegram_owner"])
+    if not tags:
+        defaults = [tag.strip() for tag in config.get("default_tags", "").split(",") if tag.strip()]
+        caption_tags = re.findall(r"(?<!\w)#([\w\u200c]+)", description)
+        visible_words = set(video_content.key(fields["title"] + " " + fields["topics"]).split())
+        matching = [t for t in (*defaults, *caption_tags) if set(video_content.key(t).split()) <= visible_words]
+        tags = video_content.topic_tags(fields["title"], fields["topics"], matching)
+    if not isinstance(tags, list):
+        raise uploader.MetadataRequired(f"{video.name}: expected a list of video tags.")
+    clean_tags, budget = [], 500
+    for tag in tags:
+        if isinstance(tag, str):
+            tag = tag.replace("<", "").replace(">", "").strip().strip("#").strip()[:60]
+            cost = len(tag) + int(bool(clean_tags)) + (2 if " " in tag else 0)
+            if tag and cost <= budget and tag not in clean_tags:
+                clean_tags.append(tag)
+                budget -= cost
+    tags = clean_tags
+    video_content.check_for_review(" ".join([title, description, *tags]))
+    description = audience_description(description, fields["telegram_channel"], fields["telegram_owner"], tags)
+    log(f"{video.name} · title ({fields['source']}): {title} · tags: {', '.join(tags)}")
     return title, description, tags, dict(fields, title=title)
 
 
@@ -584,8 +626,8 @@ def upload_thumbnail(service, config, video, video_id, analysis, log=log_message
         return
     image = find_companion_image(video)
     if image is None:
-        cover = Path(config["cover_dir"]) / (video.stem + ".jpg")
-        if cover.is_file():
+        cover = find_companion_image(Path(config["cover_dir"]) / video.name)
+        if cover:
             image = cover
             if config.get("auto_cover"):
                 with Image.open(cover) as previous:
@@ -596,12 +638,39 @@ def upload_thumbnail(service, config, video, video_id, analysis, log=log_message
         if image is None and config.get("auto_cover"):
             image = generate_cover(video, config, analysis, log=log)
     if image:
-        mime = mimetypes.guess_type(str(image))[0] or "application/octet-stream"
-        with Path(image).open("rb") as stream:
-            media = MediaIoBaseUpload(stream, mimetype=mime)
+        with Image.open(image) as source, io.BytesIO() as stream:
+            picture = ImageOps.exif_transpose(source).convert("RGB")
+            picture.thumbnail((1280, 720), Image.Resampling.LANCZOS)
+            for quality in (92, 82, 68):
+                stream.seek(0)
+                stream.truncate()
+                picture.save(stream, "JPEG", quality=quality)
+                if stream.tell() < 2_000_000:
+                    break
+            if stream.tell() >= 2_000_000:
+                raise ValueError("Thumbnail could not fit within YouTube's 2 MB limit.")
+            stream.seek(0)
+            media = MediaIoBaseUpload(stream, mimetype="image/jpeg")
             service.thumbnails().set(videoId=video_id, media_body=media).execute(
                 num_retries=int(config["max_retries"])
             )
+        log(f"Custom thumbnail accepted for {video_id}.", "SUCCESS")
+
+
+def thumbnail_error(error):
+    if not isinstance(error, HttpError):
+        return f"{type(error).__name__}: {error}"
+    status = error.resp.status
+    try:
+        details = json.loads(error.content)["error"]
+        reason = (details.get("errors") or [{}])[0].get("reason", "")
+        message = str(details.get("message", ""))[:240]
+    except (KeyError, TypeError, ValueError, AttributeError):
+        reason, message = "", ""
+    result = f"HTTP {status} {reason} {message}".strip()
+    if status == 403 and reason == "forbidden":
+        result += " · Check this channel's access to custom thumbnails in YouTube Studio > Settings > Channel > Feature eligibility."
+    return result
 
 
 class UploaderEngine:
@@ -771,14 +840,16 @@ class UploaderEngine:
         try:
             upload_thumbnail(self.service, self.config, video, video_id, analysis, self.log)
         except Exception as error:
-            self.log(f"Video {video_id} is uploaded. Thumbnail failed ({type(error).__name__}).", "WARNING")
+            self.log(f"Video {video_id} uploaded. Thumbnail failed: {thumbnail_error(error)}", "WARNING")
+            return "uploaded_without_thumbnail"
         return "uploaded"
 
     def run(self, videos=None, skip_uploaded=True, limit=None, *, choose_client=None):
         self.stop_event.clear()
         self._pause_event.clear()
         self.is_running = True
-        summary = {"total": 0, "uploaded": 0, "failed": 0, "skipped": 0, "held": 0}
+        self.log(f"YouTube Uploader {APP_VERSION} · visual metadata")
+        summary = {"total": 0, "uploaded": 0, "failed": 0, "skipped": 0, "held": 0, "thumbnail_failed": 0}
         try:
             videos = list_videos(self.config["video_folder"]) if videos is None else list(map(Path, videos))
             done = load_uploaded_log() if skip_uploaded else set()
@@ -806,6 +877,9 @@ class UploaderEngine:
                     self.log(f"{video.name}: {type(error).__name__}. Check the upload log "
                              "and YouTube Studio before retrying.", "ERROR")
                     outcome = "failed"
+                if outcome == "uploaded_without_thumbnail":
+                    summary["thumbnail_failed"] += 1
+                    outcome = "uploaded"
                 summary[outcome] += 1
                 self._progress(index, total, video.name)
                 if outcome == "held":
@@ -814,7 +888,7 @@ class UploaderEngine:
                     self._interruptible_sleep(int(self.config["upload_delay_seconds"]))
             self._status("finished", summary=summary)
             self.log(f"Uploaded {summary['uploaded']}, held {summary['held']}, "
-                     f"skipped {summary['skipped']}, failed {summary['failed']}.")
+                     f"skipped {summary['skipped']}, failed {summary['failed']}, thumbnail failures {summary['thumbnail_failed']}.")
         except StopRequested:
             self._status("stopped", summary=summary)
         finally:
@@ -970,7 +1044,11 @@ def main(argv=None):
     if args.tg_login:
         import getpass
         import telegram_downloader as tg
-        connected = tg.login_from_config(cfg, code_cb=lambda: input("Telegram code: "),
+        def ask_code(hint, resend_at):
+            if resend_at is not None:
+                print("Enter /resend to request the next delivery method after Telegram's waiting period.")
+            return input("Telegram code: ")
+        connected = tg.login_from_config(cfg, challenge_cb=ask_code,
                                          password_cb=lambda: getpass.getpass("Two-step password: "))
         return 0 if connected else 1
     Path(cfg["video_folder"]).mkdir(parents=True, exist_ok=True)

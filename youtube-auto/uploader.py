@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 
 from desktop_oauth import read_client
-from video_content import SUBTITLE_EXTENSIONS, opaque_title
+from video_content import SUBTITLE_EXTENSIONS, MetadataRequired, opaque_title
 
 from google.auth.transport.requests import Request
 from google.auth.exceptions import RefreshError
@@ -64,10 +64,6 @@ def client(path):
     return build("youtube", "v3", credentials=creds, cache_discovery=False)
 
 
-class MetadataRequired(ValueError):
-    pass
-
-
 def check_public_metadata(file, title, description, visibility):
     if visibility.lower() != "public":
         return
@@ -111,7 +107,7 @@ def upload(service, file, *, snippet=None, status=None, retries=4, before_chunk=
 
 
 def scan(root, service, visibility="public", config=None, held=None):
-    from yt_uploader import DEFAULT_CONFIG, IMAGE_EXTENSIONS, generate_metadata_ex, upload_thumbnail
+    from yt_uploader import DEFAULT_CONFIG, IMAGE_EXTENSIONS, generate_metadata_ex, upload_thumbnail, thumbnail_error
 
     if config is None:
         config = dict(DEFAULT_CONFIG, cover_dir=str(root / "covers"))
@@ -122,7 +118,8 @@ def scan(root, service, visibility="public", config=None, held=None):
         if file.suffix.lower() not in EXTENSIONS or file.is_symlink() or not file.is_file():
             continue
         try:
-            companions = [file.with_suffix(ext) for ext in (".json", ".txt", *SUBTITLE_EXTENSIONS)]
+            companions = [file.with_suffix(ext) for ext in (".json", ".txt", *SUBTITLE_EXTENSIONS, *IMAGE_EXTENSIONS)]
+            companions.extend((Path(config["cover_dir"]) / file.name).with_suffix(ext) for ext in IMAGE_EXTENSIONS)
             if held is not None:
                 signature = [(p.stat().st_mtime_ns, p.stat().st_size) if p.exists() else None
                              for p in (file, *companions)]
@@ -160,7 +157,7 @@ def scan(root, service, visibility="public", config=None, held=None):
         try:
             upload_thumbnail(service, config, job / file.name, video_id, fields)
         except Exception as error:
-            print(f"Video {video_id} uploaded. Thumbnail failed ({type(error).__name__}).", flush=True)
+            print(f"Video {video_id} uploaded. Thumbnail failed: {thumbnail_error(error)}", flush=True)
         done = root / "done"
         done.mkdir(exist_ok=True)
         job.rename(done / job.name)

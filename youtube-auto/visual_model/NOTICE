@@ -1,0 +1,7 @@
+SqueezeNet v1.1 deployment definition and pretrained Caffe weights.
+Forrest N. Iandola and the SqueezeNet contributors. See LICENSE.
+https://github.com/forresti/SqueezeNet/tree/51147dc0681638c28aad593b9e923f3500117125
+
+ImageNet synset labels from the ONNX Model Zoo classification examples.
+https://github.com/onnx/models/blob/c5cae0f1942c8d7727372c7b1f6b485aa39e4421/validated/vision/classification/synset.txt
+The Model Zoo is distributed under Apache-2.0. The license text is included in ../tessdata/LICENSE.

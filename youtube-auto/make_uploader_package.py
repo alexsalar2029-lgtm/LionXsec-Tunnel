@@ -14,11 +14,13 @@ FILES = (
     "install_telegram.bat", "yt_uploader.py", "yt_uploader_gui.py", "telegram_downloader.py",
     "uploader.py", "desktop_oauth.py", "video_content.py", "tessdata/eng.traineddata",
     "tessdata/fas.traineddata", "tessdata/LICENSE", "tessdata/NOTICE",
+    "visual_subject.py", "visual_model/deploy.prototxt", "visual_model/squeezenet_v1.1.caffemodel",
+    "visual_model/labels.txt", "visual_model/LICENSE", "visual_model/NOTICE",
     "requirements.txt", "requirements-oauth.txt", "requirements-uploader.txt",
     "requirements-uploader-telegram.txt", "requirements-uploader-vision.txt",
     "yt_config.example.json", "videos/.keep", "covers/.keep", "make_uploader_package.ps1",
     "make_uploader_package.py", "README_DEPLOYMENT_FA.md", "README_FA.md",
-    "test_uploader.py", "test_desktop.py",
+    "test_uploader.py", "test_desktop.py", "test_telegram_login.py",
 )
 
 

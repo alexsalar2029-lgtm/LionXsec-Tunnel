@@ -29,6 +29,9 @@ import re
 import sys
 import asyncio
 import json
+import time
+import unicodedata
+from contextlib import suppress
 from pathlib import Path
 import tempfile
 
@@ -49,14 +52,14 @@ VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".m4v", ".ts", ".
 TELETHON_HINT = "The 'telethon' package is required for Telegram downloads.  Install it with:  pip install telethon"
 
 try:
-    from telethon import TelegramClient
+    from telethon import TelegramClient, functions, types
     from telethon.errors import (
         SessionPasswordNeededError,
         PhoneCodeInvalidError,
         PhoneCodeExpiredError,
         FloodWaitError,
         PhoneNumberInvalidError,
-        ApiIdInvalidError,
+        ApiIdInvalidError, AuthRestartError, PasswordHashInvalidError,
     )
     from telethon.tl.types import DocumentAttributeVideo, DocumentAttributeFilename
     from telethon.tl.functions.messages import ImportChatInviteRequest
@@ -242,6 +245,22 @@ def _parse_proxy(spec: str, log=_default_log):
 # ---------------------------------------------------------------------------
 # Downloader
 # ---------------------------------------------------------------------------
+DELIVERY_HINTS = {
+    "SentCodeTypeApp": "کد را در گفت‌وگوی رسمی Telegram در یکی از دستگاه‌های واردشده ببینید.",
+    "SentCodeTypeSms": "تلگرام ارسال کد از طریق پیامک به شمارهٔ واردشده را اعلام کرد.",
+    "SentCodeTypeSmsWord": "کلمهٔ داخل پیامک تلگرام را عیناً وارد کنید.",
+    "SentCodeTypeSmsPhrase": "عبارت داخل پیامک تلگرام را با فاصله‌های آن وارد کنید.",
+    "SentCodeTypeCall": "در تماس صوتی تلگرام، کد خوانده می‌شود.",
+    "SentCodeTypeMissedCall": "رقم‌های پایانی شمارهٔ تماس ازدست‌رفتهٔ تلگرام را وارد کنید.",
+    "SentCodeTypeEmailCode": "کد به ایمیل ورود تنظیم‌شده در حساب تلگرام ارسال شده است.",
+    "SentCodeTypeFragmentSms": "کد شمارهٔ ناشناس خود را در حساب رسمی Fragment بررسی کنید.",
+}
+
+
+def ascii_digits(value):
+    return "".join(str(unicodedata.decimal(c)) if c.isdecimal() else c for c in value)
+
+
 class TelegramDownloader:
     """Thin, thread-safe-enough wrapper around a Telethon user client.
 
@@ -258,7 +277,7 @@ class TelegramDownloader:
 
     # -- internal -----------------------------------------------------------
     def _client(self):
-        kwargs = {"device_model": "sliver-uploader", "system_version": "win", "app_version": "1.0"}
+        kwargs = {"device_model": "YouTube Uploader", "app_version": "5.2", "flood_sleep_threshold": 0}
         if self.proxy:
             kwargs["proxy"] = self.proxy
         return TelegramClient(self.session, self.api_id, self.api_hash, **kwargs)
@@ -297,58 +316,143 @@ class TelegramDownloader:
             self.log(f"Telegram connection check failed: {e}", "ERROR")
             return False
 
-    def login(self, phone: str, code_cb, password_cb=None) -> bool:
-        """First-time interactive login. ``code_cb``/``password_cb`` may block."""
-        phone = str(phone or "").strip()
+    async def _code_login(self, client, phone, code_cb, challenge_cb):
+        digits = ascii_digits(str(phone or ""))
+        phone = re.sub(r"[\s()\-\u200e\u200f]", "", digits)
+        if phone.startswith("00"):
+            phone = "+" + phone[2:]
+        if not re.fullmatch(r"\+?[1-9][0-9]{6,14}", phone):
+            self.log("برای ورود با کد، شمارهٔ کامل را با پیش‌شمارهٔ کشور وارد کنید.", "ERROR")
+            return False
+        phone = "+" + phone.lstrip("+")
+        self.log("Requesting a login code from Telegram…")
+        request = functions.auth.SendCodeRequest(phone, self.api_id, self.api_hash, types.CodeSettings())
+        try:
+            sent = await client(request)
+        except AuthRestartError:
+            sent = await client(request)
+        invalid, resends = 0, 0
+        requested_at = time.monotonic()
+        while invalid < 3:
+            if isinstance(sent, types.auth.SentCodeSuccess):
+                return bool(await client.get_me())
+            route = type(getattr(sent, "type", None)).__name__
+            hint = DELIVERY_HINTS.get(route)
+            if not hint or not getattr(sent, "phone_code_hash", None):
+                self.log("تلگرام برای این حساب تأیید در برنامهٔ رسمی می‌خواهد. "
+                         "در دستگاهی که وارد حساب شده‌اید از Login with QR استفاده کنید.", "WARNING")
+                return False
+            retry_at = None
+            if getattr(sent, "next_type", None) and resends < 1:
+                retry_at = requested_at + max(0, sent.timeout or 0)
+            self.log(hint)
+            prompt = hint if invalid == 0 else "کد قبلی پذیرفته نشد. " + hint
+            if challenge_cb:
+                answer = await asyncio.to_thread(challenge_cb, prompt, retry_at)
+            else:
+                answer = await asyncio.to_thread(code_cb) if code_cb else None
+            if answer is None or not str(answer).strip():
+                self.log("Telegram login cancelled.", "INFO")
+                return False
+            if str(answer).strip() == "/resend":
+                if retry_at is None:
+                    self.log("تلگرام روش دیگری برای ارسال کد اعلام نکرده است.", "WARNING")
+                    continue
+                remaining = retry_at - time.monotonic()
+                if remaining > 0:
+                    self.log(f"ارسال دوباره پس از {int(remaining) + 1} ثانیه فعال می‌شود.", "INFO")
+                    continue
+                sent = await client(functions.auth.ResendCodeRequest(phone, sent.phone_code_hash))
+                requested_at = time.monotonic()
+                invalid, resends = 0, resends + 1
+                continue
+            code = ascii_digits(str(answer)).strip()
+            if route not in ("SentCodeTypeSmsWord", "SentCodeTypeSmsPhrase"):
+                code = re.sub(r"[\s\-\u200e\u200f]", "", code)
+                expected = getattr(sent.type, "length", None)
+                if expected and (not code.isascii() or not code.isdigit() or len(code) != expected):
+                    self.log(f"کد این درخواست باید {expected} رقم باشد.", "WARNING")
+                    invalid += 1
+                    continue
+            try:
+                if route == "SentCodeTypeEmailCode":
+                    result = await client(functions.auth.SignInRequest(
+                        phone, sent.phone_code_hash, email_verification=types.EmailVerificationCode(code)))
+                    return isinstance(result, types.auth.Authorization)
+                await client.sign_in(phone=phone, code=code, phone_code_hash=sent.phone_code_hash)
+                return bool(await client.is_user_authorized())
+            except PhoneCodeInvalidError:
+                invalid += 1
+                self.log("تلگرام این کد را رد کرد. آخرین کد همین درخواست را بررسی کنید.", "WARNING")
+        self.log("ورود انجام نشد. در صورت دسترسی به حساب روی گوشی، Login with QR را بزنید.", "WARNING")
+        return False
 
-        async def _c(client):
+    async def _qr_login(self, client, display, cancelled):
+        qr = await client.qr_login()
+        try:
+            for attempt in range(4):
+                if cancelled():
+                    return False
+                if attempt:
+                    await qr.recreate()
+                waiting = asyncio.create_task(qr.wait())
+                try:
+                    await asyncio.sleep(0)  # Register Telethon's update handler before displaying the token.
+                    display(qr.url)
+                    while not waiting.done():
+                        if cancelled():
+                            return False
+                        await asyncio.wait({waiting}, timeout=0.25)
+                    await waiting
+                    return bool(await client.is_user_authorized())
+                except asyncio.TimeoutError:
+                    continue
+                finally:
+                    if not waiting.done():
+                        waiting.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await waiting
+            self.log("مهلت اسکن تمام شد. برای نمایش کد تازه، Login with QR را بزنید.", "WARNING")
+            return False
+        finally:
+            display(None)
+
+    def login(self, phone, code_cb=None, password_cb=None, *, challenge_cb=None, qr_cb=None, cancelled=lambda: False):
+        async def authenticate(client):
             await client.connect()
             if await client.is_user_authorized():
                 self.log("Already logged in to Telegram.", "SUCCESS")
                 return True
-            if not phone:
-                self.log("A phone number (with country code, e.g. +98…) is required for first-time login.", "ERROR")
-                return False
-            self.log("Requesting a login code from Telegram…")
-            await client.send_code_request(phone)
-            code = (code_cb() if code_cb else "") or ""
-            code = str(code).strip().replace(" ", "").replace("-", "")
-            if not code:
-                self.log("No login code entered — login cancelled.", "WARNING")
-                return False
             try:
-                await client.sign_in(phone=phone, code=code)
+                if qr_cb:
+                    ok = await self._qr_login(client, qr_cb, cancelled)
+                else:
+                    ok = await self._code_login(client, phone, code_cb, challenge_cb)
             except SessionPasswordNeededError:
-                self.log("Two-step verification is enabled — a password is needed.")
-                pw = (password_cb() if password_cb else None)
-                if not pw:
-                    self.log("No 2FA password entered — login cancelled.", "WARNING")
+                password = await asyncio.to_thread(password_cb) if password_cb else None
+                if not password:
+                    self.log("Two-step verification cancelled.", "INFO")
                     return False
-                await client.sign_in(password=str(pw))
-            ok = bool(await client.is_user_authorized())
+                await client.sign_in(password=password)
+                ok = bool(await client.is_user_authorized())
             if ok:
-                try:
-                    me = await client.get_me()
-                    uname = getattr(me, "username", None) or "—"
-                    self.log(f"✅ Logged in to Telegram as {getattr(me, 'first_name', '') or ''} (@{uname}).", "SUCCESS")
-                except Exception:
-                    self.log("✅ Logged in to Telegram.", "SUCCESS")
+                self.log("Telegram connection confirmed.", "SUCCESS")
             return ok
 
         try:
-            return self._run(_c)
-        except PhoneCodeInvalidError:
-            self.log("The login code is invalid — double-check it and try again.", "ERROR")
+            return self._run(authenticate)
         except PhoneCodeExpiredError:
-            self.log("The login code expired — request a new one and try again.", "ERROR")
+            self.log("این کد منقضی شده است. یک درخواست تازه باز کنید یا Login with QR را بزنید.", "ERROR")
         except PhoneNumberInvalidError:
-            self.log("The phone number is invalid. Use the full international format, e.g. +98912…", "ERROR")
+            self.log("شمارهٔ تلفن و پیش‌شمارهٔ کشور را بررسی کنید.", "ERROR")
+        except PasswordHashInvalidError:
+            self.log("رمز دومرحله‌ای تلگرام پذیرفته نشد.", "ERROR")
         except ApiIdInvalidError:
-            self.log("API ID / API Hash are invalid. Re-copy them from https://my.telegram.org.", "ERROR")
-        except FloodWaitError as e:
-            self.log(f"Telegram rate-limited this action — wait {e.seconds}s and retry.", "ERROR")
-        except Exception as e:
-            self.log(f"Telegram login failed: {e}", "ERROR")
+            self.log("Telegram rejected the API ID / API Hash. Check the Telegram tab.", "ERROR")
+        except FloodWaitError as error:
+            self.log(f"Telegram requested a wait of {error.seconds} seconds before retrying.", "ERROR")
+        except Exception as error:
+            self.log(f"Telegram login failed ({type(error).__name__}). Check the connection and proxy.", "ERROR")
         return False
 
     # -- download -----------------------------------------------------------
@@ -497,7 +601,8 @@ def _make_downloader(cfg, log, proxy=None):
     return TelegramDownloader(cfg.get("tg_api_id"), cfg.get("tg_api_hash"), proxy=prx, log=log)
 
 
-def login_from_config(cfg, code_cb, password_cb=None, log=None, proxy=None) -> bool:
+def login_from_config(cfg, code_cb=None, password_cb=None, log=None, proxy=None, *,
+                      challenge_cb=None, qr_cb=None, cancelled=lambda: False) -> bool:
     log = log or _default_log
     if not _guard(cfg, log):
         return False
@@ -506,7 +611,8 @@ def login_from_config(cfg, code_cb, password_cb=None, log=None, proxy=None) -> b
     except Exception as e:
         log(f"Could not initialise Telegram client (check API ID/Hash): {e}", "ERROR")
         return False
-    return dl.login(cfg.get("tg_phone", ""), code_cb, password_cb)
+    return dl.login(cfg.get("tg_phone", ""), code_cb, password_cb, challenge_cb=challenge_cb,
+                    qr_cb=qr_cb, cancelled=cancelled)
 
 
 def is_logged_in(cfg, log=None, proxy=None) -> bool:

@@ -1,2 +1,4 @@
 av==17.1.0
 tesserocr==2.13.0
+opencv-python-headless>=4.10,<5
+numpy>=1.24,<3

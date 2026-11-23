@@ -15,6 +15,8 @@ import re
 import sys
 import queue
 import threading
+import time
+import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog
 
@@ -124,6 +126,45 @@ class VideoRow(ctk.CTkFrame):
 # ===========================================================================
 # Metadata editor dialog
 # ===========================================================================
+class TelegramCodeDialog(simpledialog.Dialog):
+    def __init__(self, parent, prompt, resend_at):
+        self.prompt = prompt
+        self.resend_at = resend_at
+        super().__init__(parent, "Telegram login code")
+
+    def body(self, frame):
+        tk.Label(frame, text=self.prompt, wraplength=440).pack(padx=12, pady=8)
+        self.entry = tk.Entry(frame, width=24, justify="center")
+        self.entry.pack(pady=8)
+        return self.entry
+
+    def buttonbox(self):
+        row = tk.Frame(self)
+        tk.Button(row, text="Confirm", command=self.ok).pack(side="left", padx=4)
+        if self.resend_at is not None:
+            button = tk.Button(row, text="Resend", command=self._resend)
+            button.pack(side="left", padx=4)
+
+            def update():
+                seconds = max(0, int(self.resend_at - time.monotonic() + 0.999))
+                button.configure(text=f"Resend ({seconds}s)" if seconds else "Resend",
+                                 state="disabled" if seconds else "normal")
+                if seconds:
+                    button.after(500, update)
+            update()
+        tk.Button(row, text="Cancel", command=self.cancel).pack(side="left", padx=4)
+        row.pack(pady=8)
+        self.bind("<Return>", self.ok)
+        self.bind("<Escape>", self.cancel)
+
+    def apply(self):
+        self.result = self.entry.get()
+
+    def _resend(self):
+        self.result = "/resend"
+        self.cancel()
+
+
 class EditMetadataDialog(ctk.CTkToplevel):
     def __init__(self, app: "UploaderApp", video_path: Path):
         super().__init__(app)
@@ -504,6 +545,8 @@ class UploaderApp(ctk.CTk):
         r += 1
         b_login = ctk.CTkButton(btns, text="🔐 Login to Telegram", width=170, command=self.tg_login)
         b_login.pack(side="left", padx=6)
+        b_qr = ctk.CTkButton(btns, text="Login with QR", width=105, command=lambda: self.tg_login(qr=True))
+        b_qr.pack(side="left", padx=4)
         b_dl = ctk.CTkButton(btns, text="⬇ Download", width=130,
                              fg_color=STATUS_COLORS["uploading"], hover_color="#2563eb",
                              command=lambda: self.tg_download(auto=False))
@@ -515,7 +558,7 @@ class UploaderApp(ctk.CTk):
         b_save = ctk.CTkButton(btns, text="💾 Save", width=90, fg_color="transparent",
                                border_width=1, command=self.save_tg_settings)
         b_save.pack(side="left", padx=6)
-        self.tg_action_buttons = [b_login, b_dl, b_dlup, b_save]
+        self.tg_action_buttons = [b_login, b_qr, b_dl, b_dlup, b_save]
 
         self.tg_status_lbl = ctk.CTkLabel(page, text="", anchor="w", justify="left",
                                           text_color=("#6b7280", "#9aa4b2"),
@@ -1250,7 +1293,33 @@ class UploaderApp(ctk.CTk):
             return False
         return True
 
-    def tg_login(self):
+    def _show_tg_qr(self, url):
+        window = getattr(self, "_qr_window", None)
+        if not url:
+            if window is not None:
+                window.destroy()
+                self._qr_window = None
+            return
+        if self._tg_stop:
+            return
+        import qrcode
+        if window is None:
+            window = self._qr_window = ctk.CTkToplevel(self)
+            window.title("Telegram · Login with QR")
+            window.transient(self)
+            ctk.CTkLabel(window, text="تلگرام گوشی ← تنظیمات ← دستگاه‌ها ← اتصال دستگاه\n"
+                                      "Settings → Devices → Link Desktop Device").pack(padx=18, pady=12)
+            self._qr_image_label = ctk.CTkLabel(window, text="")
+            self._qr_image_label.pack(padx=16, pady=8)
+            def cancel():
+                self._tg_stop = True
+                self._show_tg_qr(None)
+            window.protocol("WM_DELETE_WINDOW", cancel)
+            ctk.CTkButton(window, text="Cancel", command=cancel).pack(pady=10)
+        qr_image = qrcode.make(url, box_size=5, border=4).convert("RGB")
+        self._qr_image_label.configure(image=ctk.CTkImage(qr_image, qr_image, size=qr_image.size))
+
+    def tg_login(self, qr=False):
         if self.worker and self.worker.is_alive():
             return
         self._collect_tg()
@@ -1258,14 +1327,14 @@ class UploaderApp(ctk.CTk):
         if not self._tg_ready():
             return
         self._busy(True, "tglogin")
+        self._tg_stop = False
+        self._tg_login_ok = False
         self.set_status("Logging in to Telegram…")
-        self._set_tg_status("Opening Telegram login… watch for the code in your Telegram app.")
+        self._set_tg_status("Contacting Telegram…")
         self.show_page("logs")
 
-        def code_cb():
-            return self._ask_from_main(
-                "Enter the Telegram login code\n(sent to your Telegram app / SMS):",
-                "Telegram login code")
+        def challenge_cb(hint, resend_at):
+            return self._ask_from_main((hint, resend_at), kind="tg_code")
 
         def pw_cb():
             return self._ask_from_main(
@@ -1275,8 +1344,11 @@ class UploaderApp(ctk.CTk):
         def worker():
             try:
                 ok = tg_mod.login_from_config(
-                    self.cfg, code_cb=code_cb, password_cb=pw_cb,
+                    self.cfg, challenge_cb=challenge_cb, password_cb=pw_cb,
+                    qr_cb=(lambda url: self.ui_queue.put(("tg_qr", url))) if qr else None,
+                    cancelled=lambda: self._tg_stop,
                     log=lambda m, l="INFO": self.ui_queue.put(("log", m, l)))
+                self._tg_login_ok = ok
                 self.ui_queue.put(("log",
                                    "Telegram login OK — you can Download now." if ok
                                    else "Telegram login failed. See messages above.",
@@ -1399,7 +1471,9 @@ class UploaderApp(ctk.CTk):
                     row = self.rows.get(item[1])
                     if row:
                         row.set_thumbnail(item[2])
-                elif kind in ("ask", "choose_client"):
+                elif kind == "tg_qr":
+                    self._show_tg_qr(item[1])
+                elif kind in ("ask", "tg_code", "choose_client"):
                     _, prompt, title, holder, ev = item
                     try:
                         if kind == "choose_client":
@@ -1411,6 +1485,8 @@ class UploaderApp(ctk.CTk):
                                 entry.insert(0, chosen)
                                 save_config(self.cfg)
                             holder["value"] = chosen
+                        elif kind == "tg_code":
+                            holder["value"] = TelegramCodeDialog(self, *prompt).result
                         else:
                             holder["value"] = simpledialog.askstring(title, prompt, show="*", parent=self)
                     except Exception:
@@ -1471,7 +1547,8 @@ class UploaderApp(ctk.CTk):
             summ = info.get("summary", {})
             if summ:
                 self.set_status(f"Done · uploaded {summ.get('uploaded',0)}, held {summ.get('held',0)}, "
-                                f"failed {summ.get('failed',0)}, skipped {summ.get('skipped',0)}")
+                                f"failed {summ.get('failed',0)}, skipped {summ.get('skipped',0)}, "
+                                f"thumbnail failures {summ.get('thumbnail_failed',0)}")
 
     def _on_worker_done(self, mode):
         self._busy(False)
@@ -1488,8 +1565,10 @@ class UploaderApp(ctk.CTk):
             self.progress.set(1.0)
             self.set_status("Covers generated — saved in the 'covers' folder.")
         elif mode == "tglogin":
-            self.set_status("Telegram ready.")
-            self._set_tg_status("Telegram login finished — see the Logs tab for the result.")
+            self._show_tg_qr(None)
+            status = "Telegram connected." if self._tg_login_ok else "Telegram login incomplete. See Logs."
+            self.set_status(status)
+            self._set_tg_status(status, "uploaded" if self._tg_login_ok else "failed")
         elif mode == "tgdownload":
             self.progress.set(1.0)
             self.refresh_queue()

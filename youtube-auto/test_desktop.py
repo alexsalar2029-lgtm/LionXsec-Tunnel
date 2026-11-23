@@ -1,7 +1,9 @@
 """Exercise the restored Telegram, desktop and Windows distribution entry points."""
+import asyncio
 import json
 import os
 import tempfile
+import threading
 import time
 import unittest
 from datetime import datetime
@@ -44,6 +46,13 @@ def write_recording(path, *, blank=False):
 
 
 class DesktopTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        with tempfile.TemporaryDirectory() as folder:
+            clip = Path(folder) / "sample.mp4"
+            write_recording(clip)
+            cls.media = clip.read_bytes()
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -68,7 +77,6 @@ class DesktopTests(unittest.TestCase):
             "token": "test-access", "refresh_token": "test-refresh", "client_id": "test-client",
             "client_secret": "test-secret", "expiry": "2099-01-01T00:00:00Z",
         }))
-        self.media = b"video fixture"
         self.filename = "tg_demo_0000007.mp4"
         message = SimpleNamespace(id=7, raw_text="A morning walk by the lake", document=None, video=True, file=SimpleNamespace(
             size=len(self.media), name="clip.mp4", ext=".mp4"
@@ -134,7 +142,7 @@ class DesktopTests(unittest.TestCase):
         self.connect.assert_not_called()
 
     def test_public_telegram_upload_preserves_caption_and_reports_private_result(self):
-        self.message.raw_text = "گردش کنار دریاچه\nگزارش برنامهٔ جمعه"
+        self.message.raw_text = "Watercolor basics\nتوضیح نویسنده دربارهٔ آبرنگ"
         self.responses[1] = ({"status": "200"}, b'{"id":"fixture-id","status":{"privacyStatus":"private"}}')
         cfg = json.loads(self.config.read_text())
         del cfg["visibility"]  # Use the clean installation default.
@@ -160,7 +168,9 @@ class DesktopTests(unittest.TestCase):
         body = json.loads(self.http.request_sequence[0][2])
         self.assertEqual(body["status"]["privacyStatus"], "public")
         self.assertEqual(body["snippet"]["title"], "Watercolor basics")
+        self.assertIn("Watercolor basics", body["snippet"]["tags"])
         desc = body["snippet"]["description"]
+        self.assertIn("#Watercolor_basics", desc)
         for detail in ("Mixing warm and cool colors", "Layering transparent washes", "به کانال تلگرام ما بپیوندید",
                        "https://t.me/link_Lion", "https://t.me/LionXSec"):
             self.assertIn(detail, desc)
@@ -182,8 +192,42 @@ class DesktopTests(unittest.TestCase):
         next_video.with_suffix(".vtt").write_text("WEBVTT\n\n00:00:00.000 --> 00:00:04.000\nPlanting spring bulbs\n")
         self.assertEqual(desktop.main(["--auto", "--count", "1", "--visibility", "PUBLIC"]), 0)
         self.assertEqual(self.log.read_text().splitlines(), [next_video.name])
-        self.assertEqual(json.loads(self.http.request_sequence[0][2])["snippet"]["title"], "Planting spring bulbs")
+        self.assertEqual(json.loads(self.http.request_sequence[0][2])["snippet"]["title"], "Watercolor basics")
         self.assertEqual(list((self.root / ".uploading").iterdir()), [])
+
+    def test_music_title_and_unmatched_artwork_cannot_name_a_recording(self):
+        video = self.videos / "Rec 0029~2.mp4"
+        write_recording(video, blank=True)
+        video.with_suffix(".vtt").write_text("WEBVTT\n\n00:00:00.000 --> 00:00:04.000\nA song about tulips\n")
+        video.with_suffix(".json").write_text(json.dumps({"source": "telegram_caption", "title": "A song about tulips",
+                                                         "description": "A song about tulips"}))
+        cfg = desktop.load_config(self.config)
+        with self.assertRaises(uploader.MetadataRequired):
+            desktop.generate_metadata(video, cfg)
+        self.assertTrue(uploader.opaque_title(video.stem))
+        self.assertTrue(uploader.opaque_title("Rec 0082"))
+
+    def test_thumbnail_failure_reports_google_reason_and_keeps_upload_record(self):
+        video = self.videos / "Rec 0082.mp4"
+        video.write_bytes(self.media)
+        Image.new("RGB", (1280, 720), "blue").save(video.with_suffix(".webp"))
+        self.responses[2] = ({"status": "403"}, json.dumps({"error": {"code": 403, "message": "Thumbnail denied",
+                            "errors": [{"reason": "forbidden", "message": "Thumbnail denied"}]}}).encode())
+        cfg = desktop.load_config(self.config)
+        notes = []
+        engine = desktop.UploaderEngine(cfg, log_callback=lambda msg, level: notes.append(msg))
+        result = engine.run()
+        self.assertEqual((result["uploaded"], result["thumbnail_failed"]), (1, 1))
+        self.assertTrue(any("HTTP 403 forbidden" in line for line in notes))
+        self.assertIn(video.name, desktop.load_uploaded_log())
+        self.assertEqual(engine.run()["uploaded"], 0)
+
+    def test_account_checking_promotion_is_held_before_upload(self):
+        video = self.videos / "Rec 0082.mp4"
+        video.write_bytes(self.media)
+        desktop.save_companion_metadata(video, "SilverBullet config", "Free config with 2 hits", [])
+        self.assertEqual(desktop.UploaderEngine(desktop.load_config(self.config)).run()["held"], 1)
+        self.assertFalse(self.http.request_sequence)
 
     def test_telegram_links_fit_description_limit_and_respect_saved_choices(self):
         cfg = desktop.load_config(self.config)
@@ -241,6 +285,34 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(json.loads(token.read_text())["token"], "renewed-fixture")
         self.assertEqual(json.loads(token.read_text())["refresh_token"], old["refresh_token"])
         self.connect.assert_not_called()
+
+    @unittest.skipUnless(os.name == "nt" or os.environ.get("DISPLAY"), "requires a desktop display")
+    def test_native_qr_button_displays_code_and_confirms_connection(self):
+        import yt_uploader_gui as gui
+        self.telegram_client.is_user_authorized.side_effect = [False, True]
+        approved = threading.Event()
+        async def wait():
+            while not approved.is_set():
+                await asyncio.sleep(0.01)
+        self.telegram_client.qr_login = AsyncMock(return_value=SimpleNamespace(
+            url="tg://login?token=fixture", wait=wait))
+        app = gui.UploaderApp()
+        self.addCleanup(app.destroy)
+        self.addCleanup(approved.set)
+        app.show_page("telegram")
+        button = next(b for b in app.tg_action_buttons if b.cget("text") == "Login with QR")
+        button.invoke()
+        deadline = time.monotonic() + 5
+        while getattr(app, "_qr_window", None) is None and time.monotonic() < deadline:
+            app.update()
+            time.sleep(0.01)
+        self.assertIsNotNone(app._qr_image_label.cget("image"))
+        approved.set()
+        while app._mode is not None and time.monotonic() < deadline:
+            app.update()
+            time.sleep(0.01)
+        self.assertIsNone(app._qr_window)
+        self.assertEqual(app.tg_status_lbl.cget("text"), "Telegram connected.")
 
     @unittest.skipUnless(os.name == "nt" or os.environ.get("DISPLAY"), "requires a desktop display")
     def test_native_gui_download_actions(self):
